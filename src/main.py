@@ -5,7 +5,7 @@ import sys
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from cache import new_conversation, resume_conversation, save_conversation
+from cache import delete_conversation, new_conversation, resume_conversation, save_conversation
 from config import (
     BASE_DIR,
     get_current_model_config,
@@ -79,6 +79,10 @@ def run_chat():
                 continue
 
             if user_input == "/clear":
+                # 删除当前会话文件（模拟重启：旧的从历史里清掉，新开空白会话）
+                current_conv = state.get("current_conv")
+                if current_conv:
+                    delete_conversation(current_conv["id"])
                 model_config = get_current_model_config(config)
                 state["system_prompt"] = model_config.get("system_prompt", "")
                 state["messages"] = [SystemMessage(content=state["system_prompt"])]
