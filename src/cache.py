@@ -4,11 +4,8 @@ import secrets
 import sys
 from datetime import datetime
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-
 from config import get_current_model_config, save_config
-from utils import READLINE_AVAILABLE, strip_markdown_bold
+from utils import READLINE_AVAILABLE
 
 if sys.platform == "win32":
     import msvcrt
@@ -119,6 +116,10 @@ def resume_conversation(config, llm_ref, state):
     成功加载返回 (True, new_model)；失败或取消返回 (False, current_model)。
     state 是 dict，承载 messages / system_prompt / current_conv 等可变状态。
     """
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+    from langchain_openai import ChatOpenAI
+
+    from utils import strip_markdown_bold
     conversations = list_conversations()
     if not conversations:
         print("暂无历史对话。")

@@ -1,7 +1,5 @@
 import sys
 
-from langchain_openai import ChatOpenAI
-
 from config import get_current_model_config, get_model_list, save_config
 from utils import READLINE_AVAILABLE
 
@@ -14,6 +12,8 @@ def switch_model(config, llm_ref):
     切换模型
     llm_ref: 包含 llm 的可变引用，用于更新
     """
+    from langchain_openai import ChatOpenAI
+
     current = config["current_model"]
     model_list = get_model_list(config)
 

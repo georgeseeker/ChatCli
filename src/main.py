@@ -2,9 +2,6 @@ import os
 import subprocess
 import sys
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-
 from cache import new_conversation, resume_conversation, save_conversation
 from config import (
     BASE_DIR,
@@ -37,6 +34,9 @@ def trim_history(messages, max_history_messages):
 
 def run_chat():
     """聊天主循环：只在子窗口运行"""
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+    from langchain_openai import ChatOpenAI
+
     try:
         sys.stdout.reconfigure(line_buffering=True)
     except (AttributeError, OSError):
