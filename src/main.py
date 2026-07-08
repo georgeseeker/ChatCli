@@ -3,6 +3,16 @@ import os
 import subprocess
 import sys
 
+try:
+    import readline
+    READLINE_AVAILABLE = True
+except ImportError:
+    READLINE_AVAILABLE = False
+
+import sys
+if sys.platform == "win32":
+    import msvcrt
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -32,14 +42,26 @@ def load_config():
         exit(1)
     config["api_key"] = api_key
 
-    # 校验 models 和 current_model
+    # 校验 models
     if "models" not in config or not config["models"]:
         print("错误: config.json 中未配置 models 字段")
         exit(1)
 
+    # 校验 current_model 匹配某个配置的 model 字段
     current = config.get("current_model")
-    if not current or current not in config["models"]:
-        print("错误: config.json 中 current_model 未指定或指定模型不存在")
+    if not current:
+        print("错误: config.json 中未配置 current_model 字段")
+        exit(1)
+
+    # 验证 current_model 确实对应某个配置
+    model_found = False
+    for model_config in config["models"].values():
+        if model_config.get("model") == current:
+            model_found = True
+            break
+
+    if not model_found:
+        print(f"错误: current_model '{current}' 在 models 中未找到对应配置")
         exit(1)
 
     return config
@@ -48,7 +70,6 @@ def load_config():
 def save_config(config):
     """保存配置到文件"""
     config_path = os.path.join(BASE_DIR, "config.json")
-    # 不保存 api_key 到文件
     config_to_save = {k: v for k, v in config.items() if k != "api_key"}
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config_to_save, f, indent=2, ensure_ascii=False)
@@ -57,8 +78,10 @@ def save_config(config):
 def get_current_model_config(config):
     """获取当前模型的配置"""
     current = config["current_model"]
-    model_config = config["models"][current]
-    return model_config
+    for model_config in config["models"].values():
+        if model_config.get("model") == current:
+            return model_config
+    return None
 
 
 def print_help():
@@ -78,9 +101,12 @@ def print_config(config):
     current = config["current_model"]
     models = config["models"]
 
+    # 获取所有可用的模型真实名称
+    available = [m.get("model") for m in models.values()]
+
     print(f"""
 当前模型: {current}
-可用模型: {', '.join(models.keys())}
+可用模型: {', '.join(available)}
 
 模型配置:
   temperature: {config.get("temperature", 0.7)}
@@ -89,13 +115,26 @@ def print_config(config):
 """)
 
 
+def get_model_list(config):
+    """获取模型名称列表"""
+    model_list = []
+    for model_config in config["models"].values():
+        model_name = model_config.get("model")
+        if model_name:
+            model_list.append(model_config)
+    return model_list
+
+
 def print_models(config):
     """打印可用模型列表"""
     models = config["models"]
     current = config["current_model"]
 
     print("\n可用模型:")
-    for i, name in enumerate(models.keys(), 1):
+    model_list = get_model_list(config)
+
+    for i, cfg in enumerate(model_list, 1):
+        name = cfg.get("model")
         marker = " [当前]" if name == current else ""
         print(f"  {i}. {name}{marker}")
     print()
@@ -106,49 +145,91 @@ def switch_model(config, llm_ref):
     切换模型
     llm_ref: 包含 llm 的可变引用，用于更新
     """
-    models = config["models"]
     current = config["current_model"]
+    model_list = get_model_list(config)
 
-    print_models(config)
-
-    try:
-        choice = input("选择模型编号 (直接回车取消): ").strip()
-        if not choice:
-            print("已取消。")
-            return current
-
-        idx = int(choice) - 1
-        model_names = list(models.keys())
-        if idx < 0 or idx >= len(model_names):
-            print("无效的选择。")
-            return current
-
-        new_model = model_names[idx]
-        if new_model == current:
-            print("当前已是该模型。")
-            return current
-
-        config["current_model"] = new_model
-        save_config(config)
-
-        # 重新创建 llm
-        from langchain_openai import ChatOpenAI
-        model_config = get_current_model_config(config)
-        new_llm = ChatOpenAI(
-            model=model_config["model"],
-            api_key=config["api_key"],
-            base_url=model_config["base_url"],
-            temperature=config.get("temperature", 0.7),
-            streaming=config.get("stream", False)
-        )
-        llm_ref["llm"] = new_llm
-
-        print(f"已切换到模型: {new_model}")
-        return new_model
-
-    except ValueError:
-        print("请输入有效编号。")
+    if not model_list:
+        print("没有可用模型")
         return current
+
+    print("\n可用模型:")
+
+    def print_selection(idx):
+        """打印选中状态"""
+        for i, cfg in enumerate(model_list):
+            name = cfg.get("model")
+            marker = ""
+            if name == current:
+                marker = " [当前]"
+            prefix = "  >" if i == idx else "   "
+            print(f"\033[K{prefix} {name}{marker}")
+        # 光标上移回到起始位置
+        print(f"\033[{len(model_list)}A", end="")
+
+    if not READLINE_AVAILABLE:
+        # 回退到简单输入
+        for i, cfg in enumerate(model_list, 1):
+            name = cfg.get("model")
+            marker = " [当前]" if name == current else ""
+            print(f"  {i}. {name}{marker}")
+        print()
+        try:
+            choice = input("选择模型编号 (直接回车取消): ").strip()
+            if not choice:
+                print("已取消。")
+                return current
+            idx = int(choice) - 1
+            if idx < 0 or idx >= len(model_list):
+                print("无效的选择。")
+                return current
+        except ValueError:
+            print("请输入有效编号。")
+            return current
+    else:
+        # 使用 msvcrt 上下键选择 (Windows)
+        idx = 0
+        print_selection(idx)
+
+        while True:
+            key = msvcrt.getch()
+
+            if key == b'\xe0':  # 方向键前缀
+                key = msvcrt.getch()
+                if key == b'H':  # 上
+                    idx = (idx - 1) % len(model_list)
+                    print_selection(idx)
+                elif key == b'P':  # 下
+                    idx = (idx + 1) % len(model_list)
+                    print_selection(idx)
+            elif key == b'\r' or key == b'\n':  # 回车
+                print()  # 换行
+                break
+            elif key == b'\x03':  # Ctrl+C
+                print("\n已取消。")
+                return current
+
+    new_model = model_list[idx].get("model")
+    if new_model == current:
+        print("当前已是该模型。")
+        return current
+
+    config["current_model"] = new_model
+    save_config(config)
+
+    # 重新创建 llm
+    from langchain_openai import ChatOpenAI
+    model_config = get_current_model_config(config)
+    new_llm = ChatOpenAI(
+        model=model_config["model"],
+        api_key=config["api_key"],
+        base_url=model_config["base_url"],
+        temperature=config.get("temperature", 0.7),
+        streaming=config.get("stream", False)
+    )
+    llm_ref["llm"] = new_llm
+
+    print(f"已切换到模型: {new_model}")
+    return new_model
 
 
 def trim_history(messages, max_history_messages):
