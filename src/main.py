@@ -337,6 +337,7 @@ def resume_conversation(config, llm_ref, state):
     """
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
+    from utils import strip_markdown_bold
 
     conversations = list_conversations()
     if not conversations:
@@ -464,6 +465,19 @@ def resume_conversation(config, llm_ref, state):
     state["current_conv"] = chosen
 
     print(f"已恢复会话 [{chosen['id']}]，模型: {history_model}，消息数: {len(messages) - 1}")
+
+    # 把历史消息内容打印出来，让用户看到上下文
+    restored_messages = chosen.get("messages", [])
+    if restored_messages:
+        print("\n--- 历史对话内容 ---")
+        for m in restored_messages:
+            role = m.get("role")
+            content = m.get("content", "")
+            if role == "user":
+                print(f"\nYou: {content}")
+            elif role == "assistant":
+                print(f"\nAI: {strip_markdown_bold(content)}")
+        print()
     return True, history_model
 
 
