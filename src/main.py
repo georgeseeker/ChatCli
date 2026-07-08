@@ -367,6 +367,7 @@ def resume_conversation(config, llm_ref, state):
         # 从当前行回到第一行
         if current > 0:
             sys.stdout.write(f"\033[{current}A")
+        sys.stdout.write("\r")  # 确保列位置归零
         # 重绘所有行
         for i in range(n):
             if i > 0:
@@ -377,6 +378,7 @@ def resume_conversation(config, llm_ref, state):
         back = n - 1 - new_idx
         if back > 0:
             sys.stdout.write(f"\033[{back}A")
+        sys.stdout.write("\r")  # 确保列位置归零
         sys.stdout.flush()
         idx = new_idx
 
