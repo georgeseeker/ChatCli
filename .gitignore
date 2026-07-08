@@ -20,3 +20,6 @@ config.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Chat history cache
+.cache/
