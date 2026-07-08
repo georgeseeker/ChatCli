@@ -85,6 +85,9 @@ def run_chat():
                 state["current_conv"] = new_conversation(
                     state["current_model"], state["system_prompt"]
                 )
+                # 清屏 + 光标回顶部（模拟重启的视觉效果）
+                sys.stdout.write("\033[2J\033[H")
+                sys.stdout.flush()
                 print("已清空上下文。")
                 continue
 
