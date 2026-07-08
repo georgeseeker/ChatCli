@@ -356,34 +356,44 @@ def resume_conversation(config, llm_ref, state):
 
     n = len(conversations)
     idx = 0
-    last_n = 0  # 上次渲染过的行数，用来清理删除后残留的行
 
     print("\n历史对话:")
     print("提示: ↑↓ 选择  Enter 确认  d 删除")
 
-    LIST_START_ROW = 4  # 1=空行，2="历史对话:"，3="提示:..."，4+=列表
+    # 从当前光标位置向下打印整张列表（屏幕自然滚动，列表显示在命令下方）
+    for i, conv in enumerate(conversations):
+        prefix = "  >" if i == idx else "   "
+        print(f"\033[2K{prefix} {_format_conv_summary(conv)}")
+    sys.stdout.flush()
+
+    # 光标上移 n 行回到列表第一行开头，准备接收方向键
+    sys.stdout.write(f"\033[{n}A")
+    sys.stdout.write("\r")
+    sys.stdout.flush()
 
     def rerender(new_idx):
-        """用绝对定位重绘整张列表，自动清理长度变化后的残留行"""
-        nonlocal idx, last_n
-        cur_n = len(conversations)
-        rows = max(cur_n, last_n)
-        for i in range(rows):
-            row = LIST_START_ROW + i
-            sys.stdout.write(f"\033[{row};1H\033[2K")
-            if i < cur_n:
-                prefix = "  >" if i == new_idx else "   "
-                sys.stdout.write(f"{prefix} {_format_conv_summary(conversations[i])}")
-        last_n = cur_n
-        sys.stdout.write(f"\033[{LIST_START_ROW + new_idx};1H")
+        """相对位移重绘：光标当前在 idx 行，上移到列表顶部重绘，再回到 new_idx 行"""
+        nonlocal idx
+        if idx > 0:
+            sys.stdout.write(f"\033[{idx}A")
+        sys.stdout.write("\r")
+        for i in range(n):
+            if i > 0:
+                sys.stdout.write("\n")
+            prefix = "  >" if i == new_idx else "   "
+            sys.stdout.write(f"\033[2K{prefix} {_format_conv_summary(conversations[i])}")
+        sys.stdout.flush()
+        # 光标回到 new_idx 行开头
+        back = n - 1 - new_idx
+        if back > 0:
+            sys.stdout.write(f"\033[{back}A")
+        sys.stdout.write("\r")
         sys.stdout.flush()
         idx = new_idx
 
-    rerender(idx)  # 首次渲染
-
     if not READLINE_AVAILABLE:
         # 退到编号选择：把光标移到列表外，再打印列表
-        sys.stdout.write(f"\033[{n}B\n")
+        sys.stdout.write(f"\033[{n - idx}B\n")
         sys.stdout.flush()
         for i, conv in enumerate(conversations, 1):
             print(f"  {i}. {_format_conv_summary(conv)}")
@@ -406,24 +416,32 @@ def resume_conversation(config, llm_ref, state):
             if key == b'\xe0':
                 key = msvcrt.getch()
                 if key == b'H':
-                    rerender((idx - 1) % len(conversations))
+                    rerender((idx - 1) % n)
                 elif key == b'P':
-                    rerender((idx + 1) % len(conversations))
+                    rerender((idx + 1) % n)
             elif key == b'\r' or key == b'\n':
-                sys.stdout.write(f"\033[{LIST_START_ROW + len(conversations)};1H\n")
+                # 把光标下移到列表末尾之外
+                rest = n - 1 - idx
+                if rest > 0:
+                    sys.stdout.write(f"\033[{rest}B")
+                sys.stdout.write("\n")
                 sys.stdout.flush()
                 break
             elif key == b'\x03':
-                sys.stdout.write(f"\033[{LIST_START_ROW + len(conversations)};1H\n")
+                rest = n - 1 - idx
+                if rest > 0:
+                    sys.stdout.write(f"\033[{rest}B")
+                sys.stdout.write("\n")
                 sys.stdout.flush()
                 print("已取消。")
                 return False, config["current_model"]
             elif key == b'd' or key == b'D':
-                # 删除当前选中的会话
                 conv_id = conversations[idx]["id"]
                 if not delete_conversation(conv_id):
-                    # 删除失败，把光标移到列表外提示一下
-                    sys.stdout.write(f"\033[{LIST_START_ROW + len(conversations)};1H\n")
+                    rest = n - 1 - idx
+                    if rest > 0:
+                        sys.stdout.write(f"\033[{rest}B")
+                    sys.stdout.write("\n")
                     sys.stdout.flush()
                     print(f"删除失败: {conv_id}")
                     return False, config["current_model"]
@@ -431,18 +449,35 @@ def resume_conversation(config, llm_ref, state):
                 new_list = list_conversations()
                 new_n = len(new_list)
                 if new_n == 0:
-                    sys.stdout.write(f"\033[{LIST_START_ROW + n - 1};1H\n")
+                    rest = n - 1 - idx
+                    if rest > 0:
+                        sys.stdout.write(f"\033[{rest}B")
+                    sys.stdout.write("\n")
                     sys.stdout.flush()
                     print(f"已删除会话 [{conv_id}]。暂无历史对话。")
                     return False, config["current_model"]
                 # 调整 idx
                 if idx >= new_n:
                     idx = new_n - 1
-                # 更新 conversations（保持引用，避免 rerender 闭包失效）
+                # 先把光标移到列表最后一行之外
+                rest = n - 1 - idx
+                if rest > 0:
+                    sys.stdout.write(f"\033[{rest}B")
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                # 重新打印整个列表（屏幕自然向下滚动）
                 conversations.clear()
                 conversations.extend(new_list)
                 n = new_n
-                rerender(idx)
+                for i, conv in enumerate(conversations):
+                    prefix = "  >" if i == idx else "   "
+                    print(f"\033[2K{prefix} {_format_conv_summary(conv)}")
+                sys.stdout.flush()
+                # 光标上移到 idx 行开头
+                if idx > 0:
+                    sys.stdout.write(f"\033[{n - 1 - idx}A")
+                sys.stdout.write("\r")
+                sys.stdout.flush()
 
     chosen = conversations[idx]
     history_model = chosen.get("model")
