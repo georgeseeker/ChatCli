@@ -17,7 +17,7 @@ from config import (
     print_help,
 )
 from models import switch_model
-from utils import strip_markdown_bold
+from utils import StreamingBoldStripper, strip_markdown_bold
 
 
 def trim_history(messages, max_history_messages):
@@ -139,35 +139,18 @@ def run_chat():
             if config.get("stream"):
                 print("\nAI: ", end="", flush=True)
                 response_content = ""
-                in_bold = False
-                carry = ""
+                stripper = StreamingBoldStripper()
                 for chunk in llm_ref["llm"].stream(state["messages"]):
                     if not chunk.content:
                         continue
-                    text = carry + chunk.content
-                    carry = text[-1] if text and text[-1] == "*" else ""
-                    processable = text[:-1] if carry else text
-                    out_chars = []
-                    i = 0
-                    while i < len(processable):
-                        if (
-                            processable[i] == "*"
-                            and i + 1 < len(processable)
-                            and processable[i + 1] == "*"
-                        ):
-                            in_bold = not in_bold
-                            i += 2
-                        else:
-                            out_chars.append(processable[i])
-                            i += 1
-                    out_str = "".join(out_chars)
-                    print(out_str, end="", flush=True)
-                    response_content += out_str
-                if carry:
-                    if not in_bold:
-                        response_content += carry
-                        print(carry, end="", flush=True)
-                    carry = ""
+                    out_str = stripper.feed(chunk.content)
+                    if out_str:
+                        print(out_str, end="", flush=True)
+                        response_content += out_str
+                tail = stripper.flush()
+                if tail:
+                    print(tail, end="", flush=True)
+                    response_content += tail
                 print()
                 response = AIMessage(content=response_content)
             else:
