@@ -73,9 +73,16 @@ def run_chat():
 
     print("Console LLM Chat 已启动。输入 /help 查看命令。")
 
+    # /rewind 预填框里若再输入命令，经此注入下一轮，避免被当成普通消息
+    pending_input = None
+
     while True:
         try:
-            user_input = read_framed_input("You: ").strip()
+            if pending_input is not None:
+                user_input = pending_input
+                pending_input = None
+            else:
+                user_input = read_framed_input("You: ").strip()
             if not user_input:
                 continue
 
@@ -119,15 +126,19 @@ def run_chat():
                 prefill = rewind_conversation(config, llm_ref, state)
                 if prefill is None:
                     continue
-                print("[Rewind] 直接回车按原内容发送，或输入修改后的内容（/cancel 取消）:")
+                print(
+                    "[Rewind] 直接回车发送；可改写内容；"
+                    "再输入 /rewind 继续回退；/cancel 取消:"
+                )
                 edit = read_framed_input("You: ", initial=prefill or "").strip()
                 if edit == "/cancel":
                     print("已取消。")
                     continue
                 if not edit:
                     continue
-                user_input = edit
-                # 落入下方的常规消息处理流程
+                # 重新走命令分发（支持预填框内再次 /rewind 等命令）
+                pending_input = edit
+                continue
 
             if user_input == "/exit":
                 print("再见!")

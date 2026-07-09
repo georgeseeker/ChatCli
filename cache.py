@@ -11,7 +11,7 @@ if sys.platform == "win32":
     import msvcrt
 
 
-CACHE_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".cache")  # type: ignore[assignment]
+CACHE_DIR: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
 
 
 def ensure_cache_dir():
