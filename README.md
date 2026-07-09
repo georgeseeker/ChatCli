@@ -149,8 +149,7 @@ export DEEPSEEK_API_KEY="sk-你的密钥"
 chatcli
 ```
 
-- **Windows**：一般会再弹出一个新的黑色控制台窗口，在那个窗口里聊天。  
-- **Linux / macOS**：在当前终端里直接开始聊天。  
+在**当前**终端里启动（cmd、PowerShell、Linux/macOS 终端均可）。启动时会**清空本窗口已有内容**，从顶部开始显示聊天界面。
 
 看到类似「已启动」「输入 /help」就说明成功了。
 

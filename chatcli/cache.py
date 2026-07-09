@@ -117,9 +117,14 @@ def _format_conv_summary(conv):
 
 
 def reset_screen_visual():
-    """清屏 + 光标回顶部，模拟重启视觉效果（/clear 与 /resume 共用）"""
-    sys.stdout.write("\033[2J\033[H")
-    sys.stdout.flush()
+    """清屏 + 光标回顶部（启动、/clear、/resume 等共用）。"""
+    if sys.platform == "win32":
+        # cmd / PowerShell 下 cls 最可靠，可清掉本窗口先前输出
+        os.system("cls")
+    else:
+        # 2J 清屏，3J 尽量清滚动缓冲，H 光标回左上
+        sys.stdout.write("\033[2J\033[3J\033[H")
+        sys.stdout.flush()
 
 
 def _interactive_picker(items, header, hint, on_delete=None, start_index=0):

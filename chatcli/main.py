@@ -1,4 +1,3 @@
-import subprocess
 import sys
 
 from chatcli.cache import (
@@ -56,7 +55,7 @@ def _import_llm_deps():
 
 
 def run_chat():
-    """聊天主循环：只在子窗口运行"""
+    """聊天主循环：在当前控制台运行。"""
     AIMessage, HumanMessage, SystemMessage, ChatOpenAI = _import_llm_deps()
 
     try:
@@ -64,6 +63,9 @@ def run_chat():
     except (AttributeError, OSError):
         pass
     sys.stdout.flush()
+
+    # 清空当前控制台已有输出，从顶部重新开始
+    reset_screen_visual()
 
     config = load_config()
     model_config = get_current_model_config(config)
@@ -234,29 +236,9 @@ def run_chat():
                 print(f"错误信息: {error_msg}")
 
 
-def launch_chat_window():
-    """
-    Windows：打开新控制台运行聊天；其它平台：当前终端直接进入聊天。
-    使用 python -m chatcli，兼容源码运行与 pip 安装后的入口。
-    """
-    if sys.platform == "win32":
-        subprocess.Popen(
-            [sys.executable, "-m", "chatcli", "--child"],
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
-        )
-        return
-
-    run_chat()
-
-
 def main(argv=None):
-    """控制台入口：chatcli / python -m chatcli"""
-    args = list(sys.argv[1:] if argv is None else argv)
-    if args and args[0] == "--child":
-        run_chat()
-        return
-
-    launch_chat_window()
+    """控制台入口：chatcli / python -m chatcli（始终在当前终端运行）"""
+    run_chat()
 
 
 if __name__ == "__main__":
