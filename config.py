@@ -1,8 +1,42 @@
 import json
 import os
+import shutil
+from pathlib import Path
 
 
+# 项目源码目录（脚本所在位置，与用户数据目录分离）
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 用户数据目录：跨平台家目录下的 .chatcli
+# Windows: C:\Users\<用户>\.chatcli
+# Linux/macOS: ~/.chatcli
+CHATCLI_HOME: Path = Path.home() / ".chatcli"
+CONFIG_PATH: Path = CHATCLI_HOME / "config.json"
+CACHE_DIR: Path = CHATCLI_HOME / ".cache"
+
+
+def ensure_chatcli_home():
+    """确保 ~/.chatcli 与其中的 .cache 存在；必要时从旧项目目录迁移数据。"""
+    CHATCLI_HOME.mkdir(parents=True, exist_ok=True)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    project_dir = Path(BASE_DIR)
+    old_config = project_dir / "config.json"
+    if not CONFIG_PATH.exists() and old_config.is_file():
+        try:
+            shutil.copy2(old_config, CONFIG_PATH)
+        except OSError:
+            pass
+
+    old_cache = project_dir / ".cache"
+    if old_cache.is_dir():
+        try:
+            for src in old_cache.glob("*.json"):
+                dest = CACHE_DIR / src.name
+                if not dest.exists():
+                    shutil.copy2(src, dest)
+        except OSError:
+            pass
 
 
 def _mask_secret(value):
@@ -37,15 +71,25 @@ def get_api_key(config):
 
 
 def load_config():
-    """加载并校验配置文件"""
-    config_path = os.path.join(BASE_DIR, "config.json")
+    """加载并校验配置文件（位于用户目录 ~/.chatcli/config.json）"""
+    ensure_chatcli_home()
 
-    if not os.path.exists(config_path):
-        print(f"错误: 配置文件 {config_path} 不存在")
+    if not CONFIG_PATH.is_file():
+        print(f"错误: 配置文件不存在: {CONFIG_PATH}")
+        print(f"提示: 请在 {CHATCLI_HOME} 下创建 config.json")
+        print(f"      Windows 示例: {Path.home() / '.chatcli' / 'config.json'}")
         exit(1)
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except OSError as e:
+        print(f"错误: 无法读取配置文件 {CONFIG_PATH}: {e}")
+        exit(1)
+    except json.JSONDecodeError as e:
+        print(f"错误: 配置文件不是合法 JSON: {CONFIG_PATH}")
+        print(f"      第 {e.lineno} 行第 {e.colno} 列: {e.msg}")
+        exit(1)
 
     raw_key = config.get("api_key")
     if isinstance(raw_key, str):
@@ -54,7 +98,7 @@ def load_config():
         raw_key = ""
 
     if not raw_key:
-        print("错误: config.json 中未配置 api_key 字段")
+        print(f"错误: {CONFIG_PATH} 中未配置 api_key 字段")
         print('提示: 可写环境变量名，如 "DEEPSEEK_API_KEY"')
         print('      或直接写密钥，如 "sk-xxxxxxxx"')
         exit(1)
@@ -71,12 +115,12 @@ def load_config():
     config["_api_key_source"] = source
 
     if "models" not in config or not config["models"]:
-        print("错误: config.json 中未配置 models 字段")
+        print(f"错误: {CONFIG_PATH} 中未配置 models 字段")
         exit(1)
 
     current = config.get("current_model")
     if not current:
-        print("错误: config.json 中未配置 current_model 字段")
+        print(f"错误: {CONFIG_PATH} 中未配置 current_model 字段")
         exit(1)
 
     model_found = False
@@ -93,12 +137,15 @@ def load_config():
 
 
 def save_config(config):
-    """保存配置到文件（不落盘运行时解析出的密钥与内部标记）"""
-    config_path = os.path.join(BASE_DIR, "config.json")
+    """保存配置到用户目录（不落盘运行时解析出的密钥与内部标记）"""
+    ensure_chatcli_home()
     skip = {"_resolved_api_key", "_api_key_source"}
     config_to_save = {k: v for k, v in config.items() if k not in skip}
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(config_to_save, f, indent=2, ensure_ascii=False)
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(config_to_save, f, indent=2, ensure_ascii=False)
+    except OSError as e:
+        print(f"错误: 无法写入配置文件 {CONFIG_PATH}: {e}")
 
 
 def get_current_model_config(config):
@@ -134,7 +181,7 @@ def print_help():
 
 /config
   显示当前模型、可用模型列表，以及 temperature、stream、api_key 等配置。
-  直接写在配置里的密钥会脱敏显示。
+  直接写在配置里的密钥会脱敏显示。配置文件位于用户目录 ~/.chatcli/config.json。
 
 /model
   交互式切换模型（列表选择）。
@@ -196,6 +243,9 @@ def print_config(config):
     print(f"""
 当前模型: {current}
 可用模型: {', '.join(available)}
+
+数据目录: {CHATCLI_HOME}
+配置文件: {CONFIG_PATH}
 
 模型配置:
   temperature: {config.get("temperature", 0.7)}

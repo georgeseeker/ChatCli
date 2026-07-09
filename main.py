@@ -204,7 +204,7 @@ def run_chat():
 
             if "model" in error_msg.lower() or "not found" in error_msg.lower():
                 print("\n错误: 模型不可用")
-                print("请检查 config.json 中的 model 配置是否正确")
+                print("请检查 ~/.chatcli/config.json 中的 model 配置是否正确")
             elif (
                 "api" in error_msg.lower()
                 or "key" in error_msg.lower()
@@ -213,7 +213,7 @@ def run_chat():
             ):
                 print("\n错误: API 认证失败")
                 print(
-                    "请检查 config.json 的 api_key："
+                    "请检查 ~/.chatcli/config.json 的 api_key："
                     "可为环境变量名，或直接填写密钥"
                 )
             else:

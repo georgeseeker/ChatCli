@@ -4,18 +4,21 @@ import secrets
 import sys
 from datetime import datetime
 
-from config import get_api_key, get_current_model_config, save_config
+from config import (
+    CACHE_DIR,
+    ensure_chatcli_home,
+    get_api_key,
+    get_current_model_config,
+    save_config
+)
 from utils import print_user_block, strip_markdown_bold
 
 if sys.platform == "win32":
     import msvcrt
 
 
-CACHE_DIR: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
-
-
 def ensure_cache_dir():
-    os.makedirs(CACHE_DIR, exist_ok=True)
+    ensure_chatcli_home()
 
 
 def _now_iso():
@@ -23,7 +26,7 @@ def _now_iso():
 
 
 def _conv_file_path(conv_id):
-    return os.path.join(CACHE_DIR, f"{conv_id}.json")
+    return str(CACHE_DIR / f"{conv_id}.json")
 
 
 def new_conversation(model, system_prompt):
@@ -71,10 +74,14 @@ def list_conversations():
     ensure_cache_dir()
     items = []
     empty_files = []
-    for name in os.listdir(CACHE_DIR):
+    try:
+        names = os.listdir(CACHE_DIR)
+    except OSError:
+        return []
+    for name in names:
         if not name.endswith(".json"):
             continue
-        path = os.path.join(CACHE_DIR, name)
+        path = str(CACHE_DIR / name)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 conv = json.load(f)

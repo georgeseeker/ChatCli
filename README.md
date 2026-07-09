@@ -1,20 +1,55 @@
 # ChatCli
 
-Windows 控制台 LLM 聊天客户端。支持多模型切换、流式输出、历史会话、导入/导出，以及框线多行输入。
+跨平台控制台 LLM 聊天客户端。支持多模型切换、流式输出、历史会话、导入/导出，以及框线多行输入。
 
 ## 环境要求
 
-- Windows
 - Python 3.10+
+- Windows / Linux / macOS
 - 依赖：
 
 ```bash
 pip install langchain-core langchain-openai
 ```
 
+## 用户数据目录
+
+配置与会话缓存放在**用户主目录**下的 `.chatcli` 中（跨平台）：
+
+| 平台 | 路径 |
+|------|------|
+| Windows | `C:\Users\<用户名>\.chatcli\` |
+| Linux / macOS | `~/.chatcli/` |
+
+目录结构：
+
+```
+~/.chatcli/
+  config.json    # 配置
+  .cache/        # 历史会话
+```
+
+首次启动时，若该目录尚无配置、但项目根目录仍有旧的 `config.json` / `.cache`，会自动复制过去（不删除原文件）。
+
 ## 快速开始
 
-1. 在项目根目录创建 `config.json`（该文件已在 `.gitignore` 中，不会提交）：
+1. 创建配置文件（按你的系统选择路径）：
+
+**Windows (PowerShell):**
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.chatcli" | Out-Null
+# 然后编辑 $env:USERPROFILE\.chatcli\config.json
+```
+
+**Linux / macOS:**
+
+```bash
+mkdir -p ~/.chatcli
+# 然后编辑 ~/.chatcli/config.json
+```
+
+`config.json` 示例：
 
 ```json
 {
@@ -39,13 +74,13 @@ pip install langchain-core langchain-openai
 
 2. 配置 `api_key`（见下一节）。
 
-3. 启动：
+3. 在项目目录启动：
 
 ```bash
 python main.py
 ```
 
-会打开新的控制台窗口进入聊天。
+Windows 下会打开新的控制台窗口进入聊天。
 
 ## 配置说明
 
@@ -73,10 +108,16 @@ python main.py
 "api_key": "DEEPSEEK_API_KEY"
 ```
 
-PowerShell 设置：
+Windows (PowerShell)：
 
 ```powershell
 $env:DEEPSEEK_API_KEY = "sk-xxxxxxxx"
+```
+
+Linux / macOS：
+
+```bash
+export DEEPSEEK_API_KEY="sk-xxxxxxxx"
 ```
 
 示例 — 直接写密钥：
@@ -85,7 +126,7 @@ $env:DEEPSEEK_API_KEY = "sk-xxxxxxxx"
 "api_key": "sk-xxxxxxxx"
 ```
 
-> 注意：直接写密钥时请勿把 `config.json` 提交到公开仓库（项目已默认忽略该文件）。
+> 注意：直接写密钥时，配置仅保存在本机用户目录，请勿把含密钥的文件分享出去。
 
 ## 命令
 
@@ -95,7 +136,7 @@ $env:DEEPSEEK_API_KEY = "sk-xxxxxxxx"
 |------|------|
 | `/help` | 显示帮助 |
 | `/clear` | 清空当前上下文，保留 system prompt，开新会话 |
-| `/config` | 显示当前配置（直接密钥会脱敏） |
+| `/config` | 显示当前配置与数据目录路径（直接密钥会脱敏） |
 | `/model` | 切换模型（切换后开新会话） |
 | `/resume` | 恢复历史会话（↑↓ 选择，Enter 确认，`d` 删除） |
 | `/import <绝对路径>` | 从 JSON 导入会话并打开 |
@@ -113,10 +154,10 @@ $env:DEEPSEEK_API_KEY = "sk-xxxxxxxx"
 
 ### 导入 / 导出
 
-- `/import C:\path\to\chat.json`  
-  支持本工具导出的格式，以及从 Grok 网页端爬取的消息 JSON（只抽取 `role` 与文本内容）。导入后写入本地 `.cache/` 历史，可继续对话，不再依赖源文件。
+- `/import <绝对路径>`  
+  支持本工具导出的格式，以及从 Grok 网页端爬取的消息 JSON（只抽取 `role` 与文本内容）。导入后写入 `~/.chatcli/.cache/`，可继续对话，不再依赖源文件。
 
-- `/export C:\path\to\out.json`  
+- `/export <绝对路径>`  
   弹出历史列表选择后导出为：
 
 ```json
@@ -130,18 +171,19 @@ $env:DEEPSEEK_API_KEY = "sk-xxxxxxxx"
 
 ## 历史与缓存
 
-会话保存在项目根目录的 `.cache/` 下（已 gitignore）。每条会话为独立 JSON，含模型、system prompt 与消息列表。
+会话保存在 `~/.chatcli/.cache/` 下。每条会话为独立 JSON，含模型、system prompt 与消息列表。
 
 ## 项目结构
 
 ```
-ChatCli/
-  main.py       # 入口与主循环
-  config.py     # 配置加载与帮助
-  models.py     # 模型切换
-  cache.py      # 历史、resume/import/export/rewind
-  utils.py      # 框线输入、流式 ** 剥离等
-  config.json   # 本地配置（不入库）
-  .cache/       # 会话缓存（不入库）
-```
+ChatCli/                 # 源码仓库
+  main.py                # 入口与主循环
+  config.py              # 配置加载与帮助（用户数据路径）
+  models.py              # 模型切换
+  cache.py               # 历史、resume/import/export/rewind
+  utils.py               # 框线输入、流式 ** 剥离等
 
+~/.chatcli/              # 用户数据（不在仓库内）
+  config.json
+  .cache/
+```
