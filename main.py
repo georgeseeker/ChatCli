@@ -13,6 +13,7 @@ from cache import (
 )
 from config import (
     BASE_DIR,
+    get_api_key,
     get_current_model_config,
     load_config,
     print_config,
@@ -55,7 +56,7 @@ def run_chat():
     model_config = get_current_model_config(config)
     llm = ChatOpenAI(
         model=model_config["model"],
-        api_key=config["api_key"],
+        api_key=get_api_key(config),
         base_url=model_config["base_url"],
         temperature=config.get("temperature", 0.7),
         streaming=config.get("stream", False)
@@ -211,7 +212,10 @@ def run_chat():
                 or "unauthorized" in error_msg.lower()
             ):
                 print("\n错误: API 认证失败")
-                print(f"请检查环境变量 {config.get('api_key_env', 'api_key_env')} 是否正确")
+                print(
+                    "请检查 config.json 的 api_key："
+                    "可为环境变量名，或直接填写密钥"
+                )
             else:
                 print("\n错误: 无法连接到 API")
                 print(f"错误信息: {error_msg}")

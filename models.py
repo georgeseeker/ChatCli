@@ -1,6 +1,6 @@
 import sys
 
-from config import get_current_model_config, get_model_list, save_config
+from config import get_api_key, get_current_model_config, get_model_list, save_config
 from utils import READLINE_AVAILABLE
 
 if sys.platform == "win32":
@@ -84,7 +84,7 @@ def switch_model(config, llm_ref):
     model_config = get_current_model_config(config)
     new_llm = ChatOpenAI(
         model=model_config["model"],
-        api_key=config["api_key"],
+        api_key=get_api_key(config),
         base_url=model_config["base_url"],
         temperature=config.get("temperature", 0.7),
         streaming=config.get("stream", False)

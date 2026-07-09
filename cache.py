@@ -4,7 +4,7 @@ import secrets
 import sys
 from datetime import datetime
 
-from config import get_current_model_config, save_config
+from config import get_api_key, get_current_model_config, save_config
 from utils import print_user_block, strip_markdown_bold
 
 if sys.platform == "win32":
@@ -313,7 +313,7 @@ def resume_conversation(config, llm_ref, state):
     model_config = get_current_model_config(config)
     llm_ref["llm"] = ChatOpenAI(
         model=model_config["model"],
-        api_key=config["api_key"],
+        api_key=get_api_key(config),
         base_url=model_config["base_url"],
         temperature=config.get("temperature", 0.7),
         streaming=config.get("stream", False),
