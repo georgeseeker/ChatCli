@@ -400,45 +400,72 @@ def parse_import_json(data):
       - 简单格式：role + content
       - 包装对象：{"messages": [...]}
     返回 [{role: user|assistant, content: str}, ...]
+    格式不符时抛出 ValueError。
     """
+    if data is None:
+        raise ValueError("JSON 内容为空（null），需要消息数组或含 messages 的对象")
+
     if isinstance(data, dict):
         if isinstance(data.get("messages"), list):
             data = data["messages"]
         elif isinstance(data.get("data"), list):
             data = data["data"]
         else:
-            raise ValueError("JSON 对象中未找到 messages 数组")
+            raise ValueError(
+                "JSON 对象格式不符合会话结构"
+                "（需要 messages/data 数组，或根节点直接为消息数组）"
+            )
 
     if not isinstance(data, list):
-        raise ValueError("JSON 根节点应为消息数组")
+        raise ValueError(
+            f"JSON 根节点类型无效: {type(data).__name__}，"
+            "应为消息数组 [{role, content}, ...]"
+        )
+
+    if len(data) == 0:
+        raise ValueError("消息数组为空，没有可导入的内容")
 
     result = []
+    skipped = 0
     for item in data:
         if not isinstance(item, dict):
+            skipped += 1
             continue
         role = _normalize_import_role(item.get("role"))
         if role is None:
+            skipped += 1
             continue
 
-        if "content" in item and item["content"] is not None and not isinstance(
-            item.get("contents"), list
-        ):
-            content = item["content"]
-            if not isinstance(content, str):
-                # 兼容 content 也是 contents 风格列表的情况
-                content = _extract_contents_text(content)
-        elif "contents" in item:
-            content = _extract_contents_text(item.get("contents"))
-        else:
-            content = ""
+        try:
+            if "content" in item and item["content"] is not None and not isinstance(
+                item.get("contents"), list
+            ):
+                content = item["content"]
+                if not isinstance(content, str):
+                    # 兼容 content 也是 contents 风格列表的情况
+                    content = _extract_contents_text(content)
+            elif "contents" in item:
+                content = _extract_contents_text(item.get("contents"))
+            else:
+                content = ""
 
-        if not isinstance(content, str):
-            content = str(content) if content is not None else ""
+            if not isinstance(content, str):
+                content = str(content) if content is not None else ""
+        except Exception as e:
+            raise ValueError(f"解析某条消息的文本内容失败: {e}") from e
 
         content = content.strip()
         if not content:
+            skipped += 1
             continue
         result.append({"role": role, "content": content})
+
+    if not result:
+        raise ValueError(
+            "未解析到有效的 user/assistant 文本消息"
+            f"（共 {len(data)} 条记录，跳过 {skipped} 条）。"
+            "每条需含 role（user/assistant）以及 content 或 contents 文本"
+        )
 
     return result
 
@@ -447,40 +474,83 @@ def import_conversation(path, config, state):
     """
     /import 命令：从外部 JSON 导入会话，落盘为独立历史，并切换为当前对话。
     导入后不再依赖源文件。成功返回 True，失败返回 False。
+    路径缺失、非 JSON、格式不符等异常均就地提示，不抛出到主循环。
     """
+    try:
+        return _import_conversation_impl(path, config, state)
+    except Exception as e:
+        print(f"错误: 导入失败: {e}")
+        return False
+
+
+def _import_conversation_impl(path, config, state):
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
     path = (path or "").strip().strip('"').strip("'")
     if not path:
         print("用法: /import <绝对路径>")
+        print("示例: /import C:\\path\\to\\chat.json")
         return False
 
     if not os.path.isabs(path):
         print("错误: 请使用绝对路径，例如 /import C:\\path\\to\\chat.json")
         return False
 
-    if not os.path.isfile(path):
+    if os.path.isdir(path):
+        print(f"错误: 路径是目录，请指定 .json 文件: {path}")
+        return False
+
+    if not os.path.exists(path):
         print(f"错误: 文件不存在: {path}")
+        return False
+
+    if not os.path.isfile(path):
+        print(f"错误: 不是普通文件: {path}")
+        return False
+
+    # 扩展名提示（仍允许尝试解析，但明确要求 json）
+    _, ext = os.path.splitext(path)
+    if ext.lower() != ".json":
+        print(f"错误: 请导入 .json 文件（当前扩展名: {ext or '无'}）")
+        return False
+
+    try:
+        size = os.path.getsize(path)
+    except OSError as e:
+        print(f"错误: 无法访问文件: {e}")
+        return False
+
+    if size == 0:
+        print("错误: 文件为空，不是有效的会话 JSON")
         return False
 
     try:
         with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            raw = f.read()
+    except UnicodeDecodeError:
+        print("错误: 文件不是合法的 UTF-8 文本，无法作为 JSON 导入")
+        return False
     except OSError as e:
         print(f"错误: 无法读取文件: {e}")
         return False
+
+    if not raw.strip():
+        print("错误: 文件内容为空，不是有效的会话 JSON")
+        return False
+
+    try:
+        data = json.loads(raw)
     except json.JSONDecodeError as e:
-        print(f"错误: JSON 解析失败: {e}")
+        print(
+            f"错误: 不是合法 JSON"
+            f"（第 {e.lineno} 行第 {e.colno} 列: {e.msg}）"
+        )
         return False
 
     try:
         imported = parse_import_json(data)
     except ValueError as e:
-        print(f"错误: {e}")
-        return False
-
-    if not imported:
-        print("错误: 未从文件中解析到有效的 user/assistant 消息。")
+        print(f"错误: JSON 格式不符合会话结构: {e}")
         return False
 
     # 切换前持久化当前非空会话
@@ -520,6 +590,218 @@ def import_conversation(path, config, state):
         elif role == "assistant":
             print(f"\nAI: {strip_markdown_bold(content)}")
     print()
+    return True
+
+
+def export_conversation(path, state):
+    """
+    /export 命令：选择一条历史会话，导出为可被 /import 再次导入的 JSON。
+    格式为 [{role, content}, ...]，只含上下文必要字段。
+    路径缺失、目录不存在、权限/写入失败等均就地提示，不抛出到主循环。
+    成功返回 True，失败或取消返回 False。
+    """
+    try:
+        return _export_conversation_impl(path, state)
+    except Exception as e:
+        print(f"错误: 导出失败: {e}")
+        return False
+
+
+def _prepare_export_destination(path, conv_id):
+    """
+    解析导出目标路径：支持文件路径或目录。
+    父目录不存在时尝试创建。成功返回最终文件绝对路径，失败返回 None。
+    """
+    looks_like_dir = (
+        path.endswith(os.sep)
+        or path.endswith("/")
+        or path.endswith("\\")
+    )
+
+    if looks_like_dir or os.path.isdir(path):
+        parent = path.rstrip("\\/") if looks_like_dir else path
+        if os.path.exists(parent) and not os.path.isdir(parent):
+            print(f"错误: 路径不是目录: {parent}")
+            return None
+        if not os.path.isdir(parent):
+            try:
+                os.makedirs(parent, exist_ok=True)
+            except PermissionError:
+                print(f"错误: 无权限创建目录: {parent}")
+                return None
+            except OSError as e:
+                print(f"错误: 无法创建目录 {parent}: {e}")
+                return None
+        if not os.path.isdir(parent):
+            print(f"错误: 目录不存在且无法创建: {parent}")
+            return None
+        final_path = os.path.join(parent, f"{conv_id}.json")
+    else:
+        _, ext = os.path.splitext(path)
+        if ext.lower() != ".json":
+            print(f"错误: 请导出为 .json 文件（当前扩展名: {ext or '无'}）")
+            return None
+
+        parent = os.path.dirname(path)
+        if parent:
+            if os.path.exists(parent) and not os.path.isdir(parent):
+                print(f"错误: 父路径不是目录: {parent}")
+                return None
+            if not os.path.isdir(parent):
+                try:
+                    os.makedirs(parent, exist_ok=True)
+                except PermissionError:
+                    print(f"错误: 无权限创建目录: {parent}")
+                    return None
+                except OSError as e:
+                    print(f"错误: 目录不存在且无法创建 {parent}: {e}")
+                    return None
+                if not os.path.isdir(parent):
+                    print(f"错误: 目录不存在且无法创建: {parent}")
+                    return None
+
+        if os.path.exists(path) and os.path.isdir(path):
+            print(f"错误: 目标路径是目录，请指定文件名或在路径末尾加分隔符: {path}")
+            return None
+
+        final_path = path
+
+    # 目标若已存在，必须是可覆盖的普通文件
+    if os.path.exists(final_path):
+        if not os.path.isfile(final_path):
+            print(f"错误: 目标已存在且不是普通文件: {final_path}")
+            return None
+        if not os.access(final_path, os.W_OK):
+            print(f"错误: 目标文件不可写: {final_path}")
+            return None
+    else:
+        check_dir = os.path.dirname(final_path) or "."
+        if not os.access(check_dir, os.W_OK):
+            print(f"错误: 目录不可写: {check_dir}")
+            return None
+
+    return final_path
+
+
+def _export_conversation_impl(path, state):
+    path = (path or "").strip().strip('"').strip("'")
+    if not path:
+        print("用法: /export <绝对路径>")
+        print("示例: /export C:\\path\\to\\chat.json")
+        return False
+
+    if not os.path.isabs(path):
+        print("错误: 请使用绝对路径，例如 /export C:\\path\\to\\chat.json")
+        return False
+
+    # 文件目标时先做扩展名校验，避免选完会话才发现路径非法
+    looks_like_dir = (
+        path.endswith(os.sep)
+        or path.endswith("/")
+        or path.endswith("\\")
+        or os.path.isdir(path)
+    )
+    if not looks_like_dir:
+        _, ext = os.path.splitext(path)
+        if ext.lower() != ".json":
+            print(f"错误: 请导出为 .json 文件（当前扩展名: {ext or '无'}）")
+            return False
+        parent = os.path.dirname(path)
+        if parent and os.path.exists(parent) and not os.path.isdir(parent):
+            print(f"错误: 父路径不是目录: {parent}")
+            return False
+
+    # 先落盘当前非空会话，使其出现在可选列表中
+    current_conv = state.get("current_conv")
+    if current_conv and current_conv.get("messages"):
+        try:
+            save_conversation(current_conv)
+        except OSError as e:
+            print(f"错误: 无法保存当前会话到缓存: {e}")
+            return False
+        except Exception as e:
+            print(f"错误: 保存当前会话失败: {e}")
+            return False
+
+    try:
+        conversations = list_conversations()
+    except Exception as e:
+        print(f"错误: 读取历史对话列表失败: {e}")
+        return False
+
+    if not conversations:
+        print("暂无历史对话。")
+        return False
+
+    items = [_format_conv_summary(c) for c in conversations]
+    try:
+        idx, action = _interactive_picker(
+            items,
+            header="选择要导出的对话:",
+            hint="提示: ↑↓ 选择  Enter 确认",
+        )
+    except Exception as e:
+        print(f"错误: 选择列表失败: {e}")
+        return False
+
+    if action != "selected" or idx is None:
+        print("已取消导出。")
+        return False
+
+    if idx < 0 or idx >= len(conversations):
+        print("错误: 无效的选择。")
+        return False
+
+    chosen = conversations[idx]
+    conv_id = chosen.get("id")
+    if not conv_id:
+        print("错误: 会话缺少 id，无法导出。")
+        return False
+
+    export_data = []
+    try:
+        for m in chosen.get("messages") or []:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            content = m.get("content", "")
+            if role not in ("user", "assistant"):
+                continue
+            if content is None:
+                content = ""
+            if not isinstance(content, str):
+                content = str(content)
+            export_data.append({"role": role, "content": content})
+    except Exception as e:
+        print(f"错误: 整理导出会话内容失败: {e}")
+        return False
+
+    if not export_data:
+        print("错误: 该会话没有可导出的消息。")
+        return False
+
+    final_path = _prepare_export_destination(path, conv_id)
+    if not final_path:
+        return False
+
+    try:
+        with open(final_path, "w", encoding="utf-8") as f:
+            json.dump(export_data, f, ensure_ascii=False, indent=2)
+    except PermissionError:
+        print(f"错误: 无权限写入文件: {final_path}")
+        return False
+    except OSError as e:
+        print(f"错误: 无法写入文件 {final_path}: {e}")
+        return False
+    except (TypeError, ValueError) as e:
+        print(f"错误: JSON 序列化失败: {e}")
+        return False
+
+    if not os.path.isfile(final_path):
+        print(f"错误: 写入后未找到导出文件: {final_path}")
+        return False
+
+    print(f"已导出会话 [{conv_id}]，{len(export_data)} 条消息 -> {final_path}")
     return True
 
 

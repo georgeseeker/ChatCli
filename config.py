@@ -87,6 +87,7 @@ def print_help():
   /model   - 切换模型
   /resume  - 恢复历史对话（上下键选择，回车确认，按 d 删除）
   /import  - 从 JSON 导入会话（/import <绝对路径>），写入历史并打开
+  /export  - 导出会话为 JSON（/export <绝对路径>），列表选择后写出可再导入格式
   /rewind  - 回退到某条用户消息之前并预填重发
   /exit    - 退出聊天窗口
 
