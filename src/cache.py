@@ -11,7 +11,7 @@ if sys.platform == "win32":
     import msvcrt
 
 
-CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".cache")
+CACHE_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".cache")  # type: ignore[assignment]
 
 
 def ensure_cache_dir():
@@ -40,7 +40,6 @@ def new_conversation(model, system_prompt):
         "system_prompt": system_prompt,
         "messages": [],
     }
-    save_conversation(conv)
     return conv
 
 
@@ -157,6 +156,8 @@ def resume_conversation(config, llm_ref, state):
             prefix = "  >" if i == new_idx else "   "
             sys.stdout.write(f"\033[2K{prefix} {_format_conv_summary(conversations[i])}")
         sys.stdout.flush()
+        sys.stdout.write("\033[J")
+        sys.stdout.flush()
         back = n - 1 - new_idx
         if back > 0:
             sys.stdout.write(f"\033[{back}A")
@@ -226,22 +227,38 @@ def resume_conversation(config, llm_ref, state):
                     sys.stdout.flush()
                     print(f"已删除会话 [{conv_id}]。暂无历史对话。")
                     return False, config["current_model"]
+                old_idx = idx
                 if idx >= new_n:
                     idx = new_n - 1
-                rest = n - 1 - idx
-                if rest > 0:
-                    sys.stdout.write(f"\033[{rest}B")
-                sys.stdout.write("\n")
-                sys.stdout.flush()
                 conversations.clear()
                 conversations.extend(new_list)
                 n = new_n
-                for i, conv in enumerate(conversations):
-                    prefix = "  >" if i == idx else "   "
-                    print(f"\033[2K{prefix} {_format_conv_summary(conv)}")
-                sys.stdout.flush()
-                if idx > 0:
-                    sys.stdout.write(f"\033[{n - 1 - idx}A")
+
+                # 从当前位置（被删项所在行）开始，只把后面的会话依次往上覆盖
+                # 上面的行保持不动，视觉上就是"下面的自动往上顶"
+                rewrite_count = n - old_idx
+                if rewrite_count > 0:
+                    for i in range(rewrite_count):
+                        write_i = old_idx + i
+                        prefix = "  >" if write_i == idx else "   "
+                        sys.stdout.write(f"\033[2K{prefix} {_format_conv_summary(conversations[write_i])}")
+                        if i < rewrite_count - 1:
+                            sys.stdout.write("\n")
+                    # 清除底部残留的旧行
+                    sys.stdout.write("\033[J")
+                    # 光标回到选中项所在行
+                    back = n - 1 - idx
+                    if back > 0:
+                        sys.stdout.write(f"\033[{back}A")
+                else:
+                    # 删除了最后一项：清除该行，然后上移更新新选中项的标记
+                    sys.stdout.write("\033[2K")
+                    move_up = old_idx - idx
+                    if move_up > 0:
+                        sys.stdout.write(f"\033[{move_up}A")
+                    sys.stdout.write("\r")
+                    sys.stdout.write(f"\033[2K  > {_format_conv_summary(conversations[idx])}")
+
                 sys.stdout.write("\r")
                 sys.stdout.flush()
 
