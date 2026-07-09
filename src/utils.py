@@ -89,14 +89,16 @@ def _truncate_to_width(text: str, width: int) -> str:
     return "".join(out)
 
 
-def _wrap_by_display_width(text: str, width: int) -> list:
-    """按显示宽度折行；保证每行 display_width <= width。"""
+def _wrap_paragraph(paragraph: str, width: int) -> list:
+    """将不含 \\n 的一段按显示宽度折行。"""
     if width < 1:
         width = 1
+    if not paragraph:
+        return [""]
     lines = []
     current = []
     current_w = 0
-    for ch in text:
+    for ch in paragraph:
         cw = char_display_width(ch)
         if cw > width:
             if current:
@@ -113,6 +115,18 @@ def _wrap_by_display_width(text: str, width: int) -> list:
             current.append(ch)
             current_w += cw
     lines.append("".join(current))
+    return lines if lines else [""]
+
+
+def _wrap_by_display_width(text: str, width: int) -> list:
+    """按显示宽度折行；硬换行 \\n 先分段，保证每行 display_width <= width。"""
+    if width < 1:
+        width = 1
+    lines = []
+    # split 保留空段，使连续换行变成空行
+    parts = text.split("\n")
+    for part in parts:
+        lines.extend(_wrap_paragraph(part, width))
     return lines if lines else [""]
 
 
@@ -133,7 +147,7 @@ def _visual_height(lines: list, term_width: int) -> int:
 def _index_to_row_col(text: str, char_index: int, width: int):
     """
     将正文中的字符下标映射到折行后的 (row, display_col)。
-    display_col 为 0-based 显示列。
+    支持硬换行 \\n。display_col 为 0-based 显示列。
     """
     if width < 1:
         width = 1
@@ -142,7 +156,13 @@ def _index_to_row_col(text: str, char_index: int, width: int):
     i = 0
     n = min(char_index, len(text))
     while i < n:
-        cw = char_display_width(text[i])
+        ch = text[i]
+        if ch == "\n":
+            row += 1
+            col = 0
+            i += 1
+            continue
+        cw = char_display_width(ch)
         if col + cw > width and col > 0:
             row += 1
             col = 0
@@ -154,6 +174,47 @@ def _index_to_row_col(text: str, char_index: int, width: int):
     return row, col
 
 
+def _shift_pressed() -> bool:
+    """检测 Shift 是否按下（用于区分 Enter / Shift+Enter）。"""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        # VK_SHIFT=0x10；高位表示当前按下
+        return bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)
+    except Exception:
+        return False
+
+
+def _move_buffer_vertically(buffer: list, cur: int, direction: int) -> int:
+    """
+    在硬换行构成的逻辑行之间上下移动光标。
+    direction: -1 上行，+1 下行。尽量保持列位置。
+    """
+    if not buffer or direction == 0:
+        return cur
+    # 各逻辑行 [start, end) 不含行尾 \\n
+    starts = [0]
+    for i, ch in enumerate(buffer):
+        if ch == "\n":
+            starts.append(i + 1)
+    line_idx = 0
+    for i, st in enumerate(starts):
+        if st <= cur:
+            line_idx = i
+    col = cur - starts[line_idx]
+    new_idx = line_idx + direction
+    if new_idx < 0 or new_idx >= len(starts):
+        return cur
+    new_start = starts[new_idx]
+    if new_idx + 1 < len(starts):
+        new_end = starts[new_idx + 1] - 1  # 指向 \\n
+    else:
+        new_end = len(buffer)
+    return min(new_start + col, new_end)
+
+
 def read_framed_input(prompt="You: ", initial="", *, leading_newline=True):
     """
     Claude Code 风格框线输入：
@@ -161,6 +222,7 @@ def read_framed_input(prompt="You: ", initial="", *, leading_newline=True):
       You: 在这里输入|
       ────────────────────────
 
+    Enter 提交；Shift+Enter 换行。
     Windows 下用按键循环实现实时重绘；其它平台退化为先画框再 input。
     返回用户输入字符串（不含首尾 strip，由调用方决定）。
     """
@@ -304,10 +366,20 @@ def _read_framed_input_win(prompt, initial, *, leading_newline):
             elif code == "M":  # Right
                 if cur < len(buffer):
                     cur += 1
-            elif code == "G":  # Home
-                cur = 0
-            elif code == "O":  # End
-                cur = len(buffer)
+            elif code == "H":  # Up — 按硬换行在行间移动
+                cur = _move_buffer_vertically(buffer, cur, -1)
+            elif code == "P":  # Down
+                cur = _move_buffer_vertically(buffer, cur, 1)
+            elif code == "G":  # Home — 移到当前逻辑行首
+                line_start = cur
+                while line_start > 0 and buffer[line_start - 1] != "\n":
+                    line_start -= 1
+                cur = line_start
+            elif code == "O":  # End — 移到当前逻辑行尾（\\n 前）
+                line_end = cur
+                while line_end < len(buffer) and buffer[line_end] != "\n":
+                    line_end += 1
+                cur = line_end
             elif code == "S":  # Delete
                 if cur < len(buffer):
                     buffer.pop(cur)
@@ -315,6 +387,12 @@ def _read_framed_input_win(prompt, initial, *, leading_newline):
             continue
 
         if ch in ("\r", "\n"):
+            # Shift+Enter：插入换行；普通 Enter：提交
+            if _shift_pressed():
+                buffer.insert(cur, "\n")
+                cur += 1
+                draw(editing=True)
+                continue
             draw(editing=False)
             return "".join(buffer)
 
@@ -335,6 +413,7 @@ def _read_framed_input_win(prompt, initial, *, leading_newline):
             draw(editing=True)
             continue
 
+        # 可打印字符（含中文）；\\n 只通过 Shift+Enter 插入
         if ch >= " " or ord(ch) > 127:
             buffer.insert(cur, ch)
             cur += 1

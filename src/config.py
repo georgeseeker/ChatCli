@@ -86,7 +86,13 @@ def print_help():
   /config  - 显示当前配置
   /model   - 切换模型
   /resume  - 恢复历史对话（上下键选择，回车确认，按 d 删除）
+  /rewind  - 回退到某条用户消息之前并预填重发
   /exit    - 退出聊天窗口
+
+输入框:
+  Enter       - 发送
+  Shift+Enter - 换行
+  ↑/↓         - 在多行之间移动
 """)
 
 
