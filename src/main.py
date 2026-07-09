@@ -2,7 +2,12 @@ import os
 import subprocess
 import sys
 
-from cache import new_conversation, resume_conversation, save_conversation
+from cache import (
+    new_conversation,
+    reset_screen_visual,
+    resume_conversation,
+    save_conversation,
+)
 from config import (
     BASE_DIR,
     get_current_model_config,
@@ -38,7 +43,7 @@ def run_chat():
     from langchain_openai import ChatOpenAI
 
     try:
-        sys.stdout.reconfigure(line_buffering=True)
+        sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
     except (AttributeError, OSError):
         pass
     sys.stdout.flush()
@@ -85,9 +90,7 @@ def run_chat():
                 state["current_conv"] = new_conversation(
                     state["current_model"], state["system_prompt"]
                 )
-                # 清屏 + 光标回顶部（模拟重启的视觉效果）
-                sys.stdout.write("\033[2J\033[H")
-                sys.stdout.flush()
+                reset_screen_visual()
                 print("已清空上下文。")
                 continue
 

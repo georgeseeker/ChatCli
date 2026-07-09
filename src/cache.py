@@ -110,6 +110,12 @@ def _format_conv_summary(conv):
     return f"{updated}  {model}  (空)"
 
 
+def reset_screen_visual():
+    """清屏 + 光标回顶部，模拟重启视觉效果（/clear 与 /resume 共用）"""
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
+
+
 def resume_conversation(config, llm_ref, state):
     """
     /resume 命令：选择并加载历史会话。
@@ -260,6 +266,11 @@ def resume_conversation(config, llm_ref, state):
         streaming=config.get("stream", False),
     )
 
+    # 切换前先持久化当前会话（非空时），保证它进入历史记录
+    current_conv = state.get("current_conv")
+    if current_conv and current_conv.get("messages"):
+        save_conversation(current_conv)
+
     messages = [SystemMessage(content=chosen.get("system_prompt", ""))]
     for m in chosen.get("messages", []):
         role = m.get("role")
@@ -272,6 +283,8 @@ def resume_conversation(config, llm_ref, state):
     state["messages"] = messages
     state["system_prompt"] = chosen.get("system_prompt", "")
     state["current_conv"] = chosen
+
+    reset_screen_visual()
 
     print(f"已恢复会话 [{chosen['id']}]，模型: {history_model}，消息数: {len(messages) - 1}")
 
