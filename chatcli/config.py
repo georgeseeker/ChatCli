@@ -4,8 +4,11 @@ import shutil
 from pathlib import Path
 
 
-# 项目源码目录（脚本所在位置，与用户数据目录分离）
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 包目录 / 仓库根（可编辑安装时仓库根在包的上一级）
+PACKAGE_DIR = Path(__file__).resolve().parent
+REPO_DIR = PACKAGE_DIR.parent
+# 兼容旧名：部分逻辑仍引用 BASE_DIR 表示源码侧目录
+BASE_DIR = str(REPO_DIR)
 
 # 用户数据目录：跨平台家目录下的 .chatcli
 # Windows: C:\Users\<用户>\.chatcli
@@ -16,19 +19,19 @@ CACHE_DIR: Path = CHATCLI_HOME / ".cache"
 
 
 def ensure_chatcli_home():
-    """确保 ~/.chatcli 与其中的 .cache 存在；必要时从旧项目目录迁移数据。"""
+    """确保 ~/.chatcli 与其中的 .cache 存在；必要时从仓库根旧位置迁移数据。"""
     CHATCLI_HOME.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-    project_dir = Path(BASE_DIR)
-    old_config = project_dir / "config.json"
+    # 仅当仓库根仍残留旧文件时迁移（site-packages 安装时通常无此路径）
+    old_config = REPO_DIR / "config.json"
     if not CONFIG_PATH.exists() and old_config.is_file():
         try:
             shutil.copy2(old_config, CONFIG_PATH)
         except OSError:
             pass
 
-    old_cache = project_dir / ".cache"
+    old_cache = REPO_DIR / ".cache"
     if old_cache.is_dir():
         try:
             for src in old_cache.glob("*.json"):
@@ -169,56 +172,101 @@ def get_model_list(config):
 def print_help():
     """打印帮助信息"""
     print("""
-可用命令
-========
+ChatCli 命令帮助
+================
+在输入框中输入下列命令（普通文字会当作发给 AI 的消息）。
 
+----------------------------------------------------------------------
 /help
-  显示本帮助信息。
+  作用: 显示本帮助，列出全部命令的作用与用法。
+  用法: /help
 
+----------------------------------------------------------------------
 /clear
-  清空当前对话上下文（用户与 AI 消息），保留当前模型的 system prompt，
-  并开启一条新的历史会话。屏幕会清屏。
+  作用: 丢掉当前正在聊的上下文，重新开一场空对话。
+  说明:
+    - 用户消息与 AI 回复都会清空
+    - 保留当前模型的 system prompt（人设）
+    - 会清屏，并在本地历史里对应一条新会话
+  用法: /clear
 
+----------------------------------------------------------------------
 /config
-  显示当前模型、可用模型列表，以及 temperature、stream、api_key 等配置。
-  直接写在配置里的密钥会脱敏显示。配置文件位于用户目录 ~/.chatcli/config.json。
+  作用: 查看当前运行配置，确认模型和密钥是否生效。
+  说明:
+    - 显示当前模型、可用模型、temperature、stream、api_key 等
+    - 若密钥是直接写在配置里的，只会脱敏显示，不会完整打印
+    - 同时显示数据目录与配置文件路径（~/.chatcli/）
+  用法: /config
 
+----------------------------------------------------------------------
 /model
-  交互式切换模型（列表选择）。
-  切换成功后会清空当前上下文，并用新模型的 system prompt 开新会话。
+  作用: 切换到另一个已在 config.json 里配置好的模型。
+  说明:
+    - 用上下键选择，回车确认
+    - 切换成功后会清空当前上下文，用新模型的 system prompt 开新会话
+  用法: /model
 
+----------------------------------------------------------------------
 /resume
-  从历史会话列表中恢复一条对话，继续聊。
-  操作: ↑↓ 选择  Enter 确认  d 删除  Ctrl-C 取消
-  恢复后会清屏并回放该会话内容；当前非空会话会先自动保存。
+  作用: 从本机历史记录里挑一场旧对话，加载进来继续聊。
+  说明:
+    - 先自动保存当前非空会话，避免丢内容
+    - 列表操作: ↑↓ 移动  Enter 确认  d 删除该条历史  Ctrl-C 取消
+    - 确认后清屏并回放该会话的全部消息，之后可直接接着问
+  用法: /resume
 
+----------------------------------------------------------------------
 /import <绝对路径>
-  从 JSON 文件导入会话，写入本地历史并立即打开，可无缝继续对话。
-  示例: /import C:\\path\\to\\chat.json
-  要求: 绝对路径、.json 文件；支持 Grok 导出或本工具 /export 的格式。
-  导入后不再依赖源文件。路径缺失、非 JSON、格式不符会提示错误。
+  作用: 把外部 JSON 对话导入本地，并立刻打开，可无缝继续聊。
+  典型场景: 用浏览器 AI Exporter 插件导出网页对话后，导入到本工具。
+  说明:
+    - 必须写文件的绝对路径，且扩展名为 .json
+    - 支持 AI Exporter / Grok 网页导出，以及本工具 /export 的格式
+    - 只抽取对话上下文（user / assistant 文本），其它无关字段忽略
+    - 导入后写入 ~/.chatcli/.cache/，之后不再依赖原来的 JSON 文件
+    - 路径不对、不是 JSON、格式不符时会提示错误，不会崩溃
+  用法:
+    /import C:\\Users\\你\\Downloads\\chat.json
+    /import /home/你/Downloads/chat.json
 
+----------------------------------------------------------------------
 /export <绝对路径>
-  将某条历史会话导出为可再 /import 的 JSON。
-  示例: /export C:\\path\\to\\out.json
-  输入后出现历史列表（↑↓ 选择  Enter 确认）；只导出 user/assistant 文本。
-  路径可为 .json 文件，或已有/可创建的目录（目录下按会话 id 命名）。
-  父目录不存在时会尝试创建；权限/路径错误会提示。
+  作用: 把某条本机历史会话导出成 JSON，方便备份或再 /import。
+  说明:
+    - 先出现历史列表: ↑↓ 选择  Enter 确认
+    - 只导出 user / assistant 的文本内容
+    - 目标可以是 .json 文件路径；若写目录，则按会话 id 自动命名
+    - 父目录不存在时会尝试创建；权限或路径错误会提示
+  用法:
+    /export C:\\Users\\你\\Desktop\\backup.json
+    /export /home/你/Desktop/backup.json
 
+----------------------------------------------------------------------
 /rewind
-  回退到某条用户消息之前（列表只显示用户消息）。
-  选中后: 截断该条及之后的对话，并把该条内容预填进输入框以便改写重发。
-  预填框内可: 直接回车发送、改写后发送、再输入 /rewind 继续回退、
-  输入 /cancel 取消发送。
+  作用: 「时光倒流」到某条用户消息之前，方便改问题重问。
+  说明:
+    - 列表只显示你发过的用户消息（↑↓ 选择  Enter 确认）
+    - 选中后: 删掉该条及其后面的对话，并把该条原文预填进输入框
+    - 预填后可以: 直接回车重发 / 改写后再发 / 再输入 /rewind 继续往回退
+    - 预填框里输入 /cancel 可取消本次发送（已回退的截断仍保留）
+  用法: /rewind
 
+----------------------------------------------------------------------
 /exit
-  退出聊天窗口。
+  作用: 退出聊天，关闭当前聊天窗口/结束进程。
+  用法: /exit
+  也可: Ctrl-C
 
-输入框
-======
-  Enter       - 发送当前输入
-  Shift+Enter - 换行（多行消息）
-  ↑/↓         - 在多行之间移动光标
+----------------------------------------------------------------------
+输入框快捷键
+============
+  Enter         发送当前输入
+  Shift+Enter   换行（多行消息）
+  ↑ / ↓         在多行之间移动光标
+
+提示: 配置与历史在用户目录 ~/.chatcli/（Windows 为
+      C:\\Users\\你的用户名\\.chatcli\\）。对话需要你自己提供 API Key。
 """)
 
 

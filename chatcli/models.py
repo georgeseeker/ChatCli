@@ -1,7 +1,7 @@
 import sys
 
-from config import get_api_key, get_current_model_config, get_model_list, save_config
-from utils import READLINE_AVAILABLE
+from chatcli.config import get_api_key, get_current_model_config, get_model_list, save_config
+from chatcli.utils import READLINE_AVAILABLE
 
 if sys.platform == "win32":
     import msvcrt

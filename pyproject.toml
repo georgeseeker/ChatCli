@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chatcli"
+version = "0.1.0"
+description = "Cross-platform console LLM chat client"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ChatCli contributors" }]
+keywords = ["llm", "chat", "cli", "console"]
+# 直接依赖；pip 会自动解析并安装其传递依赖
+# （openai、httpx、pydantic、tiktoken、langsmith 等）
+dependencies = [
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/georgeseeker/ChatCli"
+Repository = "https://github.com/georgeseeker/ChatCli"
+
+[project.scripts]
+chatcli = "chatcli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["chatcli*"]

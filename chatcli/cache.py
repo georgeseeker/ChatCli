@@ -4,14 +4,14 @@ import secrets
 import sys
 from datetime import datetime
 
-from config import (
+from chatcli.config import (
     CACHE_DIR,
     ensure_chatcli_home,
     get_api_key,
     get_current_model_config,
-    save_config
+    save_config,
 )
-from utils import print_user_block, strip_markdown_bold
+from chatcli.utils import print_user_block, strip_markdown_bold
 
 if sys.platform == "win32":
     import msvcrt

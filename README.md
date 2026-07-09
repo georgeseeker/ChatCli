@@ -1,55 +1,95 @@
 # ChatCli
 
-跨平台控制台 LLM 聊天客户端。支持多模型切换、流式输出、历史会话、导入/导出，以及框线多行输入。
+一个在电脑**命令行 / 控制台**里使用的 AI 聊天工具。
 
-## 环境要求
+## 这个项目是干什么的？
 
-- Python 3.10+
-- Windows / Linux / macOS
-- 依赖：
+ChatCli 主要配合 **谷歌浏览器（Chrome）的 AI Exporter 插件** 使用：
+
+1. 你在网页里（例如 Grok 等）和 AI 聊过一段话  
+2. 用 **AI Exporter** 把对话导出成 JSON 文件  
+3. 在 ChatCli 里用 `/import` 把这个文件导入  
+4. 之后就可以在**本地控制台**里接着聊，上下文还在  
+
+也就是说：**网页里聊过的内容，可以接到本地继续聊。**
+
+> **重要：** 本工具**不会**替你提供模型服务。你需要自己准备可用的 **API Key**（以及对应接口地址），写在配置文件里。没有 Key 就无法正常对话。
+
+除了导入网页对话，你也可以把 ChatCli 当成普通的本地多模型聊天客户端来用。
+
+---
+
+## 你需要准备什么？
+
+| 需要 | 说明 |
+|------|------|
+| 电脑 | Windows / Linux / macOS 均可 |
+| Python | **3.10 或更高**（不会装的话先装 [Python 官网](https://www.python.org/downloads/)，安装时勾选 “Add Python to PATH”） |
+| 网络 | 能访问你所用的 API（如 DeepSeek 等） |
+| API Key | 向模型服务商申请，自己保管 |
+| （可选）Chrome + AI Exporter | 若要从网页导出对话再导入 |
+
+其它 Python 包**不用**事先一个个装：后面用 `pip install` 时会**自动下载全部依赖**。
+
+---
+
+## 小白启动教程（按顺序做）
+
+### 第 1 步：下载项目
+
+打开终端（Windows 可用 PowerShell 或「命令提示符」），执行：
 
 ```bash
-pip install langchain-core langchain-openai
+git clone https://github.com/georgeseeker/ChatCli.git
+cd ChatCli
 ```
 
-## 用户数据目录
+没有 git 也可以：在 GitHub 页面点 **Code → Download ZIP**，解压后，用终端进入解压后的文件夹。
 
-配置与会话缓存放在**用户主目录**下的 `.chatcli` 中（跨平台）：
+### 第 2 步：安装到 Python 环境
 
-| 平台 | 路径 |
-|------|------|
-| Windows | `C:\Users\<用户名>\.chatcli\` |
-| Linux / macOS | `~/.chatcli/` |
+在项目文件夹里执行：
 
-目录结构：
-
-```
-~/.chatcli/
-  config.json    # 配置
-  .cache/        # 历史会话
+```bash
+pip install -e .
 ```
 
-首次启动时，若该目录尚无配置、但项目根目录仍有旧的 `config.json` / `.cache`，会自动复制过去（不删除原文件）。
+这一步会：
 
-## 快速开始
+- 安装 ChatCli  
+- **自动安装**运行所需的全部依赖  
+- 在系统里注册命令：`chatcli`  
 
-1. 创建配置文件（按你的系统选择路径）：
+如果提示 `pip` 不是命令，可试：
 
-**Windows (PowerShell):**
+```bash
+python -m pip install -e .
+```
+
+### 第 3 步：写配置文件（必须，且要填 API Key）
+
+配置放在**你的用户目录**下，不在项目文件夹里：
+
+| 系统 | 配置文件路径 |
+|------|----------------|
+| Windows | `C:\Users\你的用户名\.chatcli\config.json` |
+| Linux / macOS | `~/.chatcli/config.json` |
+
+**Windows（PowerShell）创建目录并打开编辑：**
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.chatcli" | Out-Null
-# 然后编辑 $env:USERPROFILE\.chatcli\config.json
+notepad "$env:USERPROFILE\.chatcli\config.json"
 ```
 
-**Linux / macOS:**
+**Linux / macOS：**
 
 ```bash
 mkdir -p ~/.chatcli
-# 然后编辑 ~/.chatcli/config.json
+nano ~/.chatcli/config.json
 ```
 
-`config.json` 示例：
+把下面内容粘进去，并改成**你自己的** Key 和模型（示例用 DeepSeek，可按服务商修改）：
 
 ```json
 {
@@ -59,11 +99,6 @@ mkdir -p ~/.chatcli
       "base_url": "https://api.deepseek.com",
       "model": "deepseek-v4-flash",
       "system_prompt": "你是一个简洁、准确、有帮助的 AI 助手。"
-    },
-    "deepseek-v4": {
-      "base_url": "https://api.deepseek.com",
-      "model": "deepseek-v4-pro",
-      "system_prompt": "你是一个更有深度的 AI 助手。"
     }
   },
   "current_model": "deepseek-v4-flash",
@@ -72,118 +107,165 @@ mkdir -p ~/.chatcli
 }
 ```
 
-2. 配置 `api_key`（见下一节）。
+#### `api_key` 怎么填？
 
-3. 在项目目录启动：
+两种方式，**二选一**：
 
-```bash
-python main.py
-```
-
-Windows 下会打开新的控制台窗口进入聊天。
-
-## 配置说明
-
-| 字段 | 说明 |
-|------|------|
-| `api_key` | API 密钥配置，见下方说明 |
-| `models` | 可用模型字典；每项含 `base_url`、`model`、`system_prompt` |
-| `current_model` | 当前使用的模型名，须与某条 `models.*.model` 一致 |
-| `temperature` | 采样温度 |
-| `stream` | 是否流式输出 |
-| `max_history_messages` | （可选）上下文消息条数上限；不设则不限制 |
-
-### `api_key`
-
-**可以写环境变量名字，也可以直接写密钥。**
-
-解析规则：
-
-1. 若存在与配置值同名的环境变量，则使用该环境变量的值；
-2. 否则把配置值本身当作 API 密钥。
-
-示例 — 使用环境变量（推荐）：
+**方式 A（推荐）：写环境变量的名字**
 
 ```json
 "api_key": "DEEPSEEK_API_KEY"
 ```
 
-Windows (PowerShell)：
+然后在系统里设置这个环境变量为真正的密钥。
+
+Windows PowerShell（当前窗口临时生效）：
 
 ```powershell
-$env:DEEPSEEK_API_KEY = "sk-xxxxxxxx"
+$env:DEEPSEEK_API_KEY = "sk-你的密钥"
 ```
 
 Linux / macOS：
 
 ```bash
-export DEEPSEEK_API_KEY="sk-xxxxxxxx"
+export DEEPSEEK_API_KEY="sk-你的密钥"
 ```
 
-示例 — 直接写密钥：
+**方式 B：直接把密钥写进配置**
 
 ```json
-"api_key": "sk-xxxxxxxx"
+"api_key": "sk-你的密钥"
 ```
 
-> 注意：直接写密钥时，配置仅保存在本机用户目录，请勿把含密钥的文件分享出去。
+更简单，但不要把含密钥的文件发给别人或传到公开网盘。
 
-## 命令
+保存文件后进入下一步。
 
-聊天中输入 `/help` 可查看完整说明。摘要如下：
+### 第 4 步：启动
 
-| 命令 | 说明 |
+在任意目录打开终端，输入：
+
+```bash
+chatcli
+```
+
+- **Windows**：一般会再弹出一个新的黑色控制台窗口，在那个窗口里聊天。  
+- **Linux / macOS**：在当前终端里直接开始聊天。  
+
+看到类似「已启动」「输入 /help」就说明成功了。
+
+也可以用：
+
+```bash
+python -m chatcli
+```
+
+### 第 5 步（重点）：从网页导入对话继续聊
+
+1. 用 Chrome 打开你聊过天的网页  
+2. 用 **AI Exporter** 插件导出对话，得到一个 **`.json` 文件**  
+3. 记住这个文件的**完整路径**（绝对路径），例如：  
+   - Windows：`C:\Users\张三\Downloads\chat.json`  
+   - macOS：`/Users/zhangsan/Downloads/chat.json`  
+4. 在 ChatCli 里输入（路径换成你的）：  
+
+```text
+/import C:\Users\张三\Downloads\chat.json
+```
+
+5. 导入成功后，历史消息会显示出来，你直接输入新问题即可**接着聊**  
+6. 导入后的会话会保存在本机 `~/.chatcli/.cache/`，**不再依赖**那个导出文件  
+
+导出到本地备份可用：
+
+```text
+/export C:\Users\张三\Desktop\backup.json
+```
+
+---
+
+## 常用命令（聊天窗口里输入）
+
+| 命令 | 作用 |
 |------|------|
-| `/help` | 显示帮助 |
-| `/clear` | 清空当前上下文，保留 system prompt，开新会话 |
-| `/config` | 显示当前配置与数据目录路径（直接密钥会脱敏） |
-| `/model` | 切换模型（切换后开新会话） |
-| `/resume` | 恢复历史会话（↑↓ 选择，Enter 确认，`d` 删除） |
-| `/import <绝对路径>` | 从 JSON 导入会话并打开 |
-| `/export <绝对路径>` | 选择历史会话，导出为可再导入的 JSON |
-| `/rewind` | 回退到某条用户消息之前并预填重发 |
+| `/help` | 查看完整帮助 |
+| `/clear` | 清空当前对话，开新会话 |
+| `/config` | 看当前配置和数据目录 |
+| `/model` | 切换模型 |
+| `/resume` | 从历史记录里恢复以前的会话 |
+| `/import 绝对路径` | 导入 JSON（配合 AI Exporter） |
+| `/export 绝对路径` | 把某条历史导出成 JSON |
+| `/rewind` | 回退到某条用户消息，可改写重发 |
 | `/exit` | 退出 |
 
-### 输入框
+### 输入框快捷键
 
 | 按键 | 作用 |
 |------|------|
 | `Enter` | 发送 |
 | `Shift+Enter` | 换行 |
-| `↑` / `↓` | 在多行之间移动 |
+| `↑` / `↓` | 多行时移动光标 |
 
-### 导入 / 导出
+---
 
-- `/import <绝对路径>`  
-  支持本工具导出的格式，以及从 Grok 网页端爬取的消息 JSON（只抽取 `role` 与文本内容）。导入后写入 `~/.chatcli/.cache/`，可继续对话，不再依赖源文件。
+## 数据存在哪里？
 
-- `/export <绝对路径>`  
-  弹出历史列表选择后导出为：
+| 内容 | 位置 |
+|------|------|
+| 配置 | `~/.chatcli/config.json` |
+| 聊天历史 | `~/.chatcli/.cache/` |
 
-```json
-[
-  {"role": "user", "content": "..."},
-  {"role": "assistant", "content": "..."}
-]
+Windows 下的 `~` 就是 `C:\Users\你的用户名`。
+
+这些文件在你自己电脑上，**不会**自动上传到 GitHub。
+
+---
+
+## 常见问题
+
+**Q：提示找不到 `chatcli` 命令？**  
+A：确认安装时用的是同一个 Python。试 `python -m pip install -e .`，再用 `python -m chatcli` 启动。
+
+**Q：提示配置文件不存在？**  
+A：按「第 3 步」建好 `~/.chatcli/config.json`。
+
+**Q：提示 API 认证失败？**  
+A：检查 `api_key` 是否填对、环境变量是否设置、Key 是否有效、是否有余额/权限。
+
+**Q：导入失败？**  
+A：路径必须是**绝对路径**，文件必须是 `.json`，且来自 AI Exporter / 本工具 `/export` 的对话格式。路径有空格时可用引号包起来。
+
+**Q：`pip install -e .` 里的 `-e` 是什么？**  
+A：可编辑安装，方便你改项目代码。只想用、不改代码，可以改成 `pip install .`，依赖同样会自动装全。
+
+**Q：可以不装 AI Exporter 吗？**  
+A：可以。没有插件也能直接当本地聊天客户端用；只是少了「从网页一键导出再导入」这条链路。
+
+---
+
+## 卸载
+
+```bash
+pip uninstall chatcli
 ```
 
-该文件可再次 `/import`。
+配置和历史在 `~/.chatcli/`，若要一并删除，请手动删这个文件夹。
 
-## 历史与缓存
+---
 
-会话保存在 `~/.chatcli/.cache/` 下。每条会话为独立 JSON，含模型、system prompt 与消息列表。
-
-## 项目结构
+## 给想了解结构的人
 
 ```
-ChatCli/                 # 源码仓库
-  main.py                # 入口与主循环
-  config.py              # 配置加载与帮助（用户数据路径）
-  models.py              # 模型切换
-  cache.py               # 历史、resume/import/export/rewind
-  utils.py               # 框线输入、流式 ** 剥离等
+ChatCli/
+  pyproject.toml    # 打包与依赖，安装时自动装包
+  main.py           # 可选：python main.py
+  chatcli/          # 程序源码
+    main.py         # 启动与聊天循环
+    config.py       # 配置与用户目录
+    cache.py        # 历史、导入导出
+    ...
 
-~/.chatcli/              # 用户数据（不在仓库内）
+~/.chatcli/         # 你的配置和历史（本机）
   config.json
   .cache/
 ```
