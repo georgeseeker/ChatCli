@@ -47,10 +47,7 @@ def load_config():
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    # api_key 为主；兼容旧字段 api_key_env
     raw_key = config.get("api_key")
-    if raw_key is None or (isinstance(raw_key, str) and not raw_key.strip()):
-        raw_key = config.get("api_key_env")
     if isinstance(raw_key, str):
         raw_key = raw_key.strip()
     else:
@@ -72,7 +69,6 @@ def load_config():
     config["api_key"] = raw_key
     config["_resolved_api_key"] = resolved
     config["_api_key_source"] = source
-    config.pop("api_key_env", None)  # 旧字段不再保留
 
     if "models" not in config or not config["models"]:
         print("错误: config.json 中未配置 models 字段")
@@ -99,7 +95,7 @@ def load_config():
 def save_config(config):
     """保存配置到文件（不落盘运行时解析出的密钥与内部标记）"""
     config_path = os.path.join(BASE_DIR, "config.json")
-    skip = {"_resolved_api_key", "_api_key_source", "api_key_env"}
+    skip = {"_resolved_api_key", "_api_key_source"}
     config_to_save = {k: v for k, v in config.items() if k not in skip}
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config_to_save, f, indent=2, ensure_ascii=False)
