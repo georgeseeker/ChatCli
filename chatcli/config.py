@@ -17,11 +17,51 @@ CHATCLI_HOME: Path = Path.home() / ".chatcli"
 CONFIG_PATH: Path = CHATCLI_HOME / "config.json"
 CACHE_DIR: Path = CHATCLI_HOME / ".cache"
 
+# 默认示例配置：用户删除 ~/.chatcli 或 config.json 时会按此重建
+DEFAULT_CONFIG = {
+    "api_key": "DEEPSEEK_API_KEY",
+    "models": {
+        "deepseek-chat": {
+            "base_url": "https://api.deepseek.com",
+            "model": "deepseek-v4-flash",
+            "system_prompt": "你是一个简洁、准确、有帮助的 AI 助手。",
+        },
+        "deepseek-v4": {
+            "base_url": "https://api.deepseek.com",
+            "model": "deepseek-v4-pro",
+            "system_prompt": "你是一个专业深入的 AI 助手。",
+        },
+    },
+    "current_model": "deepseek-v4-flash",
+    "temperature": 0.7,
+    "stream": True,
+}
+
+
+def write_default_config():
+    """写入示例 config.json（两个 DeepSeek 模型样本）。"""
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        return True
+    except OSError as e:
+        print(f"错误: 无法创建示例配置 {CONFIG_PATH}: {e}")
+        return False
+
 
 def ensure_chatcli_home():
-    """确保 ~/.chatcli 与其中的 .cache 存在；必要时从仓库根旧位置迁移数据。"""
-    CHATCLI_HOME.mkdir(parents=True, exist_ok=True)
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    """
+    确保 ~/.chatcli 与其中的 .cache 存在。
+    若用户删除了整个目录或 config.json，会自动重建并写入示例配置。
+    必要时从仓库根旧位置迁移数据。
+    """
+    try:
+        CHATCLI_HOME.mkdir(parents=True, exist_ok=True)
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"错误: 无法创建数据目录 {CHATCLI_HOME}: {e}")
+        return
 
     # 仅当仓库根仍残留旧文件时迁移（site-packages 安装时通常无此路径）
     old_config = REPO_DIR / "config.json"
@@ -40,6 +80,12 @@ def ensure_chatcli_home():
                     shutil.copy2(src, dest)
         except OSError:
             pass
+
+    # 仍无配置则写入内置示例（首次使用或用户删掉了 .chatcli / config.json）
+    if not CONFIG_PATH.is_file():
+        if write_default_config():
+            print(f"已创建示例配置: {CONFIG_PATH}")
+            print("请编辑 api_key（环境变量名或直接写密钥）后再开始对话。")
 
 
 def _mask_secret(value):
@@ -78,10 +124,12 @@ def load_config():
     ensure_chatcli_home()
 
     if not CONFIG_PATH.is_file():
-        print(f"错误: 配置文件不存在: {CONFIG_PATH}")
-        print(f"提示: 请在 {CHATCLI_HOME} 下创建 config.json")
-        print(f"      Windows 示例: {Path.home() / '.chatcli' / 'config.json'}")
-        exit(1)
+        # ensure 已尝试创建示例；仍失败则退出
+        if not write_default_config():
+            print(f"错误: 配置文件不存在且无法创建: {CONFIG_PATH}")
+            exit(1)
+        print(f"已创建示例配置: {CONFIG_PATH}")
+        print("请编辑 api_key（环境变量名或直接写密钥）后再开始对话。")
 
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:

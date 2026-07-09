@@ -89,7 +89,9 @@ mkdir -p ~/.chatcli
 nano ~/.chatcli/config.json
 ```
 
-把下面内容粘进去，并改成**你自己的** Key 和模型（示例用 DeepSeek，可按服务商修改）：
+**一般不用手建文件**：第一次运行 `chatcli`，或删掉了整个 `.chatcli` 文件夹后再次运行，会自动创建目录，并写入下面这份**示例配置**（两个 DeepSeek 模型）。你只需改 `api_key`。
+
+若要手动编辑，内容应与下例一致（可按服务商改模型）：
 
 ```json
 {
@@ -99,6 +101,11 @@ nano ~/.chatcli/config.json
       "base_url": "https://api.deepseek.com",
       "model": "deepseek-v4-flash",
       "system_prompt": "你是一个简洁、准确、有帮助的 AI 助手。"
+    },
+    "deepseek-v4": {
+      "base_url": "https://api.deepseek.com",
+      "model": "deepseek-v4-pro",
+      "system_prompt": "你是一个专业深入的 AI 助手。"
     }
   },
   "current_model": "deepseek-v4-flash",
