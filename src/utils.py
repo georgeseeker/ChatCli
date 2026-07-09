@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+
 import unicodedata
 
 try:
@@ -10,7 +11,7 @@ except ImportError:
     READLINE_AVAILABLE = False
 
 if sys.platform == "win32":
-    import msvcrt
+    pass
 
 
 def get_terminal_width(default=80):
@@ -174,19 +175,6 @@ def _index_to_row_col(text: str, char_index: int, width: int):
     return row, col
 
 
-def _shift_pressed() -> bool:
-    """检测 Shift 是否按下（用于区分 Enter / Shift+Enter）。"""
-    if sys.platform != "win32":
-        return False
-    try:
-        import ctypes
-
-        # VK_SHIFT=0x10；高位表示当前按下
-        return bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)
-    except Exception:
-        return False
-
-
 def _move_buffer_vertically(buffer: list, cur: int, direction: int) -> int:
     """
     在硬换行构成的逻辑行之间上下移动光标。
@@ -247,6 +235,207 @@ def _read_framed_input_fallback(prompt, initial, *, leading_newline):
         raise
     print("─" * _usable_width())
     return text
+
+
+# --- Windows 控制台原始按键读取（避免 msvcrt.kbhit 被鼠标/焦点事件干扰） ---
+
+_WIN_KEY_EVENT = 0x0001
+_WIN_SHIFT_PRESSED = 0x0010
+_WIN_LEFT_CTRL = 0x0008
+_WIN_RIGHT_CTRL = 0x0004
+_WIN_VK_RETURN = 0x0D
+_WIN_VK_BACK = 0x08
+_WIN_VK_ESCAPE = 0x1B
+_WIN_VK_LEFT = 0x25
+_WIN_VK_UP = 0x26
+_WIN_VK_RIGHT = 0x27
+_WIN_VK_DOWN = 0x28
+_WIN_VK_HOME = 0x24
+_WIN_VK_END = 0x23
+_WIN_VK_DELETE = 0x2E
+_WIN_VK_C = 0x43
+
+# Console modes
+_ENABLE_PROCESSED_INPUT = 0x0001
+_ENABLE_LINE_INPUT = 0x0002
+_ENABLE_ECHO_INPUT = 0x0004
+_ENABLE_WINDOW_INPUT = 0x0008
+_ENABLE_MOUSE_INPUT = 0x0010
+_ENABLE_INSERT_MODE = 0x0020
+_ENABLE_QUICK_EDIT_MODE = 0x0040
+_ENABLE_EXTENDED_FLAGS = 0x0080
+_ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
+
+
+class _WinConsoleInput:
+    """
+    用 ReadConsoleInputW 读键，只处理「按下」的键盘事件。
+    忽略鼠标、菜单、焦点等，避免 msvcrt.kbhit 误报导致卡死/吞键。
+    """
+
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes
+
+        self._ctypes = ctypes
+        self._kernel32 = ctypes.windll.kernel32
+        self._hIn = self._kernel32.GetStdHandle(wintypes.DWORD(-10).value)  # STD_INPUT_HANDLE
+        self._old_mode = wintypes.DWORD()
+        self._have_old = bool(
+            self._kernel32.GetConsoleMode(self._hIn, ctypes.byref(self._old_mode))
+        )
+
+        # KEY_EVENT_RECORD + INPUT_RECORD（按 Windows 布局简化）
+        class KEY_EVENT_RECORD(ctypes.Structure):
+            _fields_ = [
+                ("bKeyDown", wintypes.BOOL),
+                ("wRepeatCount", wintypes.WORD),
+                ("wVirtualKeyCode", wintypes.WORD),
+                ("wVirtualScanCode", wintypes.WORD),
+                ("UnicodeChar", wintypes.WCHAR),
+                ("dwControlKeyState", wintypes.DWORD),
+            ]
+
+        class INPUT_RECORD(ctypes.Structure):
+            _fields_ = [
+                ("EventType", wintypes.WORD),
+                ("_pad", wintypes.WORD),  # 对齐
+                ("KeyEvent", KEY_EVENT_RECORD),
+            ]
+
+        # 注意：完整 INPUT_RECORD 是 union，直接按 KeyEvent 解析在 KEY_EVENT 时可用
+        self._INPUT_RECORD = INPUT_RECORD
+        self._KEY_EVENT_RECORD = KEY_EVENT_RECORD
+
+        # 原始模式：关行缓冲/回显/鼠标；保留 processed 以便 Ctrl+C 等
+        if self._have_old:
+            new_mode = self._old_mode.value
+            new_mode &= ~_ENABLE_LINE_INPUT
+            new_mode &= ~_ENABLE_ECHO_INPUT
+            new_mode &= ~_ENABLE_MOUSE_INPUT
+            new_mode &= ~_ENABLE_QUICK_EDIT_MODE
+            new_mode &= ~_ENABLE_WINDOW_INPUT
+            new_mode &= ~_ENABLE_VIRTUAL_TERMINAL_INPUT
+            new_mode |= _ENABLE_PROCESSED_INPUT
+            new_mode |= _ENABLE_EXTENDED_FLAGS
+            self._kernel32.SetConsoleMode(self._hIn, new_mode)
+
+        # 丢掉进入输入前残留事件（IME/鼠标/焦点）
+        self._flush()
+
+    def _flush(self):
+        import ctypes
+        from ctypes import wintypes
+
+        n = wintypes.DWORD()
+        if self._kernel32.GetNumberOfConsoleInputEvents(self._hIn, ctypes.byref(n)):
+            if n.value:
+                buf = (self._INPUT_RECORD * n.value)()
+                read = wintypes.DWORD()
+                self._kernel32.ReadConsoleInputW(
+                    self._hIn, buf, n.value, ctypes.byref(read)
+                )
+
+    def close(self):
+        if self._have_old:
+            self._kernel32.SetConsoleMode(self._hIn, self._old_mode.value)
+            self._have_old = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def read(self, timeout_ms=50):
+        """
+        等待一个有效按键。
+        返回:
+          ("char", str)          可打印字符（含中文）
+          ("enter", shift: bool)
+          ("backspace", None)
+          ("esc", None)
+          ("delete", None)
+          ("left"|"right"|"up"|"down"|"home"|"end", None)
+          ("ctrl_c", None)
+          None                   超时（用于轮询窗口宽度）
+        """
+        import ctypes
+        from ctypes import wintypes
+
+        # WaitForSingleObject：有输入或超时
+        WAIT_OBJECT_0 = 0
+        ret = self._kernel32.WaitForSingleObject(self._hIn, timeout_ms)
+        if ret != WAIT_OBJECT_0:
+            return None
+
+        # 可能一次有多条事件，逐条过滤
+        while True:
+            n = wintypes.DWORD()
+            if not self._kernel32.GetNumberOfConsoleInputEvents(
+                self._hIn, ctypes.byref(n)
+            ):
+                return None
+            if n.value == 0:
+                return None
+
+            rec = self._INPUT_RECORD()
+            read = wintypes.DWORD()
+            ok = self._kernel32.ReadConsoleInputW(
+                self._hIn, ctypes.byref(rec), 1, ctypes.byref(read)
+            )
+            if not ok or read.value == 0:
+                return None
+
+            if rec.EventType != _WIN_KEY_EVENT:
+                continue  # 鼠标/焦点/菜单等直接丢弃
+
+            ke = rec.KeyEvent
+            if not ke.bKeyDown:
+                continue  # 忽略弹起
+
+            vk = ke.wVirtualKeyCode
+            ctrl = ke.dwControlKeyState
+            ch = ke.UnicodeChar
+            shift = bool(ctrl & _WIN_SHIFT_PRESSED)
+            ctrl_down = bool(ctrl & (_WIN_LEFT_CTRL | _WIN_RIGHT_CTRL))
+
+            # Ctrl+C
+            if ctrl_down and vk == _WIN_VK_C:
+                return "ctrl_c", None
+
+            if vk == _WIN_VK_RETURN:
+                return "enter", shift
+
+            if vk == _WIN_VK_BACK:
+                return "backspace", None
+
+            if vk == _WIN_VK_ESCAPE:
+                return "esc", None
+
+            if vk == _WIN_VK_DELETE:
+                return "delete", None
+
+            if vk == _WIN_VK_LEFT:
+                return "left", None
+            if vk == _WIN_VK_RIGHT:
+                return "right", None
+            if vk == _WIN_VK_UP:
+                return "up", None
+            if vk == _WIN_VK_DOWN:
+                return "down", None
+            if vk == _WIN_VK_HOME:
+                return "home", None
+            if vk == _WIN_VK_END:
+                return "end", None
+
+            # 可打印字符（UnicodeChar 非空且非控制符）
+            if ch and ch >= " ":
+                # 过滤纯修饰键（Shift 等也会带 UnicodeChar=\0 或空）
+                return "char", ch
+
+            # 其它键（纯 Shift/Ctrl/Alt）忽略，继续读
+            continue
 
 
 def _read_framed_input_win(prompt, initial, *, leading_newline):
@@ -341,83 +530,108 @@ def _read_framed_input_win(prompt, initial, *, leading_newline):
         sys.stdout.flush()
         cursor_frame_row = target_row
 
-    draw(editing=True)
+    def safe_draw(*, editing=True):
+        try:
+            draw(editing=editing)
+        except (OSError, ValueError, UnicodeEncodeError):
+            # 控制台写入/编码失败时不打断输入循环（不吞掉逻辑错误）
+            try:
+                sys.stdout.flush()
+            except OSError:
+                pass
 
-    while True:
-        # 空闲轮询终端宽度；变化时整框擦除再画，避免堆线
-        if not msvcrt.kbhit():
-            tw = get_terminal_width()
-            if tw != last_term_width:
-                # 等尺寸稍稳再画，减少最大化动画中途连刷
-                time.sleep(0.05)
-                if get_terminal_width() == tw:
-                    draw(editing=True)
-            else:
-                time.sleep(0.03)
-            continue
+    with _WinConsoleInput() as konsole:
+        safe_draw(editing=True)
 
-        ch = msvcrt.getwch()
+        while True:
+            ev = konsole.read(timeout_ms=50)
 
-        if ch in ("\x00", "\xe0"):
-            code = msvcrt.getwch()
-            if code == "K":  # Left
+            if ev is None:
+                # 超时：检查窗口宽度变化
+                tw = get_terminal_width()
+                if tw != last_term_width:
+                    time.sleep(0.03)
+                    if get_terminal_width() == tw:
+                        safe_draw(editing=True)
+                continue
+
+            kind, data = ev
+
+            if kind == "char":
+                buffer.insert(cur, data)
+                cur += 1
+                safe_draw(editing=True)
+                continue
+
+            if kind == "enter":
+                if data:  # Shift+Enter → 换行
+                    buffer.insert(cur, "\n")
+                    cur += 1
+                    safe_draw(editing=True)
+                    continue
+                safe_draw(editing=False)
+                return "".join(buffer)
+
+            if kind == "ctrl_c":
+                safe_draw(editing=False)
+                raise KeyboardInterrupt
+
+            if kind == "backspace":
+                if cur > 0:
+                    buffer.pop(cur - 1)
+                    cur -= 1
+                safe_draw(editing=True)
+                continue
+
+            if kind == "esc":
+                buffer.clear()
+                cur = 0
+                safe_draw(editing=True)
+                continue
+
+            if kind == "delete":
+                if cur < len(buffer):
+                    buffer.pop(cur)
+                safe_draw(editing=True)
+                continue
+
+            if kind == "left":
                 if cur > 0:
                     cur -= 1
-            elif code == "M":  # Right
+                safe_draw(editing=True)
+                continue
+
+            if kind == "right":
                 if cur < len(buffer):
                     cur += 1
-            elif code == "H":  # Up — 按硬换行在行间移动
+                safe_draw(editing=True)
+                continue
+
+            if kind == "up":
                 cur = _move_buffer_vertically(buffer, cur, -1)
-            elif code == "P":  # Down
+                safe_draw(editing=True)
+                continue
+
+            if kind == "down":
                 cur = _move_buffer_vertically(buffer, cur, 1)
-            elif code == "G":  # Home — 移到当前逻辑行首
+                safe_draw(editing=True)
+                continue
+
+            if kind == "home":
                 line_start = cur
                 while line_start > 0 and buffer[line_start - 1] != "\n":
                     line_start -= 1
                 cur = line_start
-            elif code == "O":  # End — 移到当前逻辑行尾（\\n 前）
+                safe_draw(editing=True)
+                continue
+
+            if kind == "end":
                 line_end = cur
                 while line_end < len(buffer) and buffer[line_end] != "\n":
                     line_end += 1
                 cur = line_end
-            elif code == "S":  # Delete
-                if cur < len(buffer):
-                    buffer.pop(cur)
-            draw(editing=True)
-            continue
-
-        if ch in ("\r", "\n"):
-            # Shift+Enter：插入换行；普通 Enter：提交
-            if _shift_pressed():
-                buffer.insert(cur, "\n")
-                cur += 1
-                draw(editing=True)
+                safe_draw(editing=True)
                 continue
-            draw(editing=False)
-            return "".join(buffer)
-
-        if ch == "\x03":
-            draw(editing=False)
-            raise KeyboardInterrupt
-
-        if ch == "\x08":  # Backspace
-            if cur > 0:
-                buffer.pop(cur - 1)
-                cur -= 1
-            draw(editing=True)
-            continue
-
-        if ch == "\x1b":  # Esc 清空
-            buffer.clear()
-            cur = 0
-            draw(editing=True)
-            continue
-
-        # 可打印字符（含中文）；\\n 只通过 Shift+Enter 插入
-        if ch >= " " or ord(ch) > 127:
-            buffer.insert(cur, ch)
-            cur += 1
-            draw(editing=True)
 
 
 def _content_to_text(content):
