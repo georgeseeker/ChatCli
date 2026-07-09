@@ -355,6 +355,174 @@ def resume_conversation(config, llm_ref, state):
     return True, history_model
 
 
+def _extract_contents_text(contents):
+    """从 Grok 导出的 contents 字段拼出纯文本。"""
+    if contents is None:
+        return ""
+    if isinstance(contents, str):
+        return contents
+    if not isinstance(contents, list):
+        return str(contents)
+
+    parts = []
+    for item in contents:
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        # 只取文本块；其它 type（图片、附件等）忽略
+        if item.get("type", "text") == "text":
+            text = item.get("content")
+            if text is None:
+                text = item.get("text", "")
+            if text:
+                parts.append(str(text))
+    return "\n".join(parts)
+
+
+def _normalize_import_role(role):
+    if not role:
+        return None
+    role = str(role).strip().lower()
+    if role in ("user", "human"):
+        return "user"
+    if role in ("assistant", "ai", "model", "bot", "grok"):
+        return "assistant"
+    return None
+
+
+def parse_import_json(data):
+    """
+    从网页端导出的 JSON 中提取必要上下文。
+    支持：
+      - 消息数组（Grok 爬取格式：role + contents[].content）
+      - 简单格式：role + content
+      - 包装对象：{"messages": [...]}
+    返回 [{role: user|assistant, content: str}, ...]
+    """
+    if isinstance(data, dict):
+        if isinstance(data.get("messages"), list):
+            data = data["messages"]
+        elif isinstance(data.get("data"), list):
+            data = data["data"]
+        else:
+            raise ValueError("JSON 对象中未找到 messages 数组")
+
+    if not isinstance(data, list):
+        raise ValueError("JSON 根节点应为消息数组")
+
+    result = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        role = _normalize_import_role(item.get("role"))
+        if role is None:
+            continue
+
+        if "content" in item and item["content"] is not None and not isinstance(
+            item.get("contents"), list
+        ):
+            content = item["content"]
+            if not isinstance(content, str):
+                # 兼容 content 也是 contents 风格列表的情况
+                content = _extract_contents_text(content)
+        elif "contents" in item:
+            content = _extract_contents_text(item.get("contents"))
+        else:
+            content = ""
+
+        if not isinstance(content, str):
+            content = str(content) if content is not None else ""
+
+        content = content.strip()
+        if not content:
+            continue
+        result.append({"role": role, "content": content})
+
+    return result
+
+
+def import_conversation(path, config, state):
+    """
+    /import 命令：从外部 JSON 导入会话，落盘为独立历史，并切换为当前对话。
+    导入后不再依赖源文件。成功返回 True，失败返回 False。
+    """
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+    path = (path or "").strip().strip('"').strip("'")
+    if not path:
+        print("用法: /import <绝对路径>")
+        return False
+
+    if not os.path.isabs(path):
+        print("错误: 请使用绝对路径，例如 /import C:\\path\\to\\chat.json")
+        return False
+
+    if not os.path.isfile(path):
+        print(f"错误: 文件不存在: {path}")
+        return False
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except OSError as e:
+        print(f"错误: 无法读取文件: {e}")
+        return False
+    except json.JSONDecodeError as e:
+        print(f"错误: JSON 解析失败: {e}")
+        return False
+
+    try:
+        imported = parse_import_json(data)
+    except ValueError as e:
+        print(f"错误: {e}")
+        return False
+
+    if not imported:
+        print("错误: 未从文件中解析到有效的 user/assistant 消息。")
+        return False
+
+    # 切换前持久化当前非空会话
+    current_conv = state.get("current_conv")
+    if current_conv and current_conv.get("messages"):
+        save_conversation(current_conv)
+
+    model = state.get("current_model") or config.get("current_model", "")
+    system_prompt = state.get("system_prompt", "")
+    conv = new_conversation(model, system_prompt)
+    conv["messages"] = imported
+    save_conversation(conv)
+
+    messages = [SystemMessage(content=system_prompt)]
+    for m in imported:
+        role = m.get("role")
+        content = m.get("content", "")
+        if role == "user":
+            messages.append(HumanMessage(content=content))
+        elif role == "assistant":
+            messages.append(AIMessage(content=content))
+
+    state["messages"] = messages
+    state["current_conv"] = conv
+
+    reset_screen_visual()
+    print(
+        f"已导入会话 [{conv['id']}]，消息数: {len(imported)}，"
+        f"模型: {model}（已写入历史，不再依赖源文件）"
+    )
+    print("\n--- 导入的对话内容 ---")
+    for m in imported:
+        role = m.get("role")
+        content = m.get("content", "")
+        if role == "user":
+            print_user_block(content, leading_newline=True)
+        elif role == "assistant":
+            print(f"\nAI: {strip_markdown_bold(content)}")
+    print()
+    return True
+
+
 def rewind_conversation(config, llm_ref, state):
     """
     /rewind 命令：回退到某一条用户消息之前（不删除该消息本身）。

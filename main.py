@@ -3,6 +3,7 @@ import subprocess
 import sys
 
 from cache import (
+    import_conversation,
     new_conversation,
     reset_screen_visual,
     resume_conversation,
@@ -120,6 +121,11 @@ def run_chat():
 
             if user_input == "/resume":
                 resume_conversation(config, llm_ref, state)
+                continue
+
+            if user_input == "/import" or user_input.startswith("/import "):
+                path = user_input[len("/import") :].strip()
+                import_conversation(path, config, state)
                 continue
 
             if user_input == "/rewind":
