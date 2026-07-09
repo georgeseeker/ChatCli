@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 
 from config import get_current_model_config, save_config
-from utils import strip_markdown_bold
+from utils import print_user_block, strip_markdown_bold
 
 if sys.platform == "win32":
     import msvcrt
@@ -348,7 +348,7 @@ def resume_conversation(config, llm_ref, state):
             role = m.get("role")
             content = m.get("content", "")
             if role == "user":
-                print(f"\nYou: {strip_markdown_bold(content)}")
+                print_user_block(content, leading_newline=True)
             elif role == "assistant":
                 print(f"\nAI: {strip_markdown_bold(content)}")
         print()
@@ -424,7 +424,7 @@ def rewind_conversation(config, llm_ref, state):
             role = m.get("role")
             content = m.get("content", "")
             if role == "user":
-                print(f"\nYou: {strip_markdown_bold(content)}")
+                print_user_block(content, leading_newline=True)
             elif role == "assistant":
                 print(f"\nAI: {strip_markdown_bold(content)}")
         print()

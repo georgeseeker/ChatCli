@@ -17,7 +17,7 @@ from config import (
     print_help,
 )
 from models import switch_model
-from utils import StreamingBoldStripper, strip_markdown_bold
+from utils import StreamingBoldStripper, read_framed_input, strip_markdown_bold
 
 
 def trim_history(messages, max_history_messages):
@@ -75,8 +75,7 @@ def run_chat():
 
     while True:
         try:
-            user_input = input("\nYou: ").strip()
-
+            user_input = read_framed_input("You: ").strip()
             if not user_input:
                 continue
 
@@ -121,11 +120,13 @@ def run_chat():
                 if prefill is None:
                     continue
                 print("[Rewind] 直接回车按原内容发送，或输入修改后的内容（/cancel 取消）:")
-                edit = input("> ").strip()
+                edit = read_framed_input("You: ", initial=prefill or "").strip()
                 if edit == "/cancel":
                     print("已取消。")
                     continue
-                user_input = edit if edit else prefill
+                if not edit:
+                    continue
+                user_input = edit
                 # 落入下方的常规消息处理流程
 
             if user_input == "/exit":
