@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 
 from config import get_current_model_config, save_config
-from utils import READLINE_AVAILABLE, strip_markdown_bold
+from utils import strip_markdown_bold
 
 if sys.platform == "win32":
     import msvcrt
@@ -115,6 +115,152 @@ def reset_screen_visual():
     sys.stdout.flush()
 
 
+def _interactive_picker(items, header, hint, on_delete=None, start_index=0):
+    """
+    交互式列表选择器：↑↓ 移动  Enter 确认  Ctrl-C 取消  d 删除（可选）。
+    items: 已格式化好的字符串列表（每项一行）。
+    start_index: 初始光标位置（默认 0，方便 /rewind 传 n-1 让光标停在最新条目）。
+    on_delete(idx): 可选删除回调，应返回 (new_items, action)：
+        - action == 'continue': 列表更新为 new_items，选择器继续
+        - action == 'empty' 或返回 None 表示列表已空/失败，终止
+    返回 (selected_idx, 'selected') 或 (None, 'cancelled') 或 (None, 'empty')。
+    """
+    n = len(items)
+    if n == 0:
+        return None, "empty"
+
+    idx = max(0, min(start_index, n - 1))
+    use_interactive = sys.platform == "win32"
+
+    if not use_interactive:
+        print(f"\n{header}")
+        if hint:
+            print(hint)
+        for i, item in enumerate(items, 1):
+            print(f"  {i}. {item}")
+        print()
+        try:
+            choice = input("选择编号 (直接回车取消): ").strip()
+            if not choice:
+                print("已取消。")
+                return None, "cancelled"
+            idx = int(choice) - 1
+            if idx < 0 or idx >= n:
+                print("无效的选择。")
+                return None, "cancelled"
+        except ValueError:
+            print("请输入有效编号。")
+            return None, "cancelled"
+        return idx, "selected"
+
+    print(f"\n{header}")
+    if hint:
+        print(hint)
+
+    # 用 write 绘制列表（最后一项不额外换行），与 rerender 光标约定一致：
+    # 绘制结束后光标停在最后一项所在行，再上移 (n-1-idx) 行到高亮项。
+    # 若用 print，光标会多落在列表下方空行，上移少一行，导致后续重绘时
+    # 第 0 行残留（/rewind 默认停在末项时，按 ↑ 会出现 #1 双份）。
+    for i, item in enumerate(items):
+        if i > 0:
+            sys.stdout.write("\n")
+        prefix = "  >" if i == idx else "   "
+        sys.stdout.write(f"\033[2K{prefix} {item}")
+    sys.stdout.flush()
+
+    # 光标回到高亮那一行（而非首行），使初始视觉与 start_index 一致
+    back = n - 1 - idx
+    if back > 0:
+        sys.stdout.write(f"\033[{back}A")
+    sys.stdout.write("\r")
+    sys.stdout.flush()
+
+    def rerender(new_idx):
+        nonlocal idx
+        if idx > 0:
+            sys.stdout.write(f"\033[{idx}A")
+        sys.stdout.write("\r")
+        for i in range(n):
+            if i > 0:
+                sys.stdout.write("\n")
+            prefix = "  >" if i == new_idx else "   "
+            sys.stdout.write(f"\033[2K{prefix} {items[i]}")
+        sys.stdout.flush()
+        sys.stdout.write("\033[J")
+        sys.stdout.flush()
+        back = n - 1 - new_idx
+        if back > 0:
+            sys.stdout.write(f"\033[{back}A")
+        sys.stdout.write("\r")
+        sys.stdout.flush()
+        idx = new_idx
+
+    def bail_with_message(msg):
+        rest = n - 1 - idx
+        if rest > 0:
+            sys.stdout.write(f"\033[{rest}B")
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        print(msg)
+
+    while True:
+        key = msvcrt.getch()
+        if key == b"\xe0":
+            key = msvcrt.getch()
+            if key == b"H":
+                rerender((idx - 1) % n)
+            elif key == b"P":
+                rerender((idx + 1) % n)
+        elif key == b"\r" or key == b"\n":
+            rest = n - 1 - idx
+            if rest > 0:
+                sys.stdout.write(f"\033[{rest}B")
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            return idx, "selected"
+        elif key == b"\x03":
+            bail_with_message("已取消。")
+            return None, "cancelled"
+        elif on_delete is not None and (key == b"d" or key == b"D"):
+            old_idx = idx
+            result = on_delete(idx)
+            if not result:
+                bail_with_message("删除失败。")
+                return None, "cancelled"
+            new_items, action = result
+            if action == "empty" or not new_items:
+                bail_with_message("列表已清空。")
+                return None, "empty"
+            items.clear()
+            items.extend(new_items)
+            n = len(items)
+            if idx >= n:
+                idx = n - 1
+            rewrite_count = n - old_idx
+            if rewrite_count > 0:
+                for i in range(rewrite_count):
+                    write_i = old_idx + i
+                    prefix = "  >" if write_i == idx else "   "
+                    sys.stdout.write(f"\033[2K{prefix} {items[write_i]}")
+                    if i < rewrite_count - 1:
+                        sys.stdout.write("\n")
+                sys.stdout.write("\033[J")
+                back = n - 1 - idx
+                if back > 0:
+                    sys.stdout.write(f"\033[{back}A")
+            else:
+                sys.stdout.write("\033[2K")
+                move_up = old_idx - idx
+                if move_up > 0:
+                    sys.stdout.write(f"\033[{move_up}A")
+                sys.stdout.write("\r")
+                sys.stdout.write(f"\033[2K  > {items[idx]}")
+            sys.stdout.write("\r")
+            sys.stdout.flush()
+
+    return None, "cancelled"  # unreachable
+
+
 def resume_conversation(config, llm_ref, state):
     """
     /resume 命令：选择并加载历史会话。
@@ -129,137 +275,28 @@ def resume_conversation(config, llm_ref, state):
         print("暂无历史对话。")
         return False, config["current_model"]
 
-    n = len(conversations)
-    idx = 0
+    items = [_format_conv_summary(c) for c in conversations]
 
-    print("\n历史对话:")
-    print("提示: ↑↓ 选择  Enter 确认  d 删除")
+    def on_delete(idx):
+        conv_id = conversations[idx]["id"]
+        if not delete_conversation(conv_id):
+            return None
+        new_list = list_conversations()
+        if not new_list:
+            return [], "empty"
+        conversations.clear()
+        conversations.extend(new_list)
+        return [_format_conv_summary(c) for c in new_list], "continue"
 
-    for i, conv in enumerate(conversations):
-        prefix = "  >" if i == idx else "   "
-        print(f"\033[2K{prefix} {_format_conv_summary(conv)}")
-    sys.stdout.flush()
+    idx, action = _interactive_picker(
+        items,
+        header="历史对话:",
+        hint="提示: ↑↓ 选择  Enter 确认  d 删除",
+        on_delete=on_delete,
+    )
 
-    sys.stdout.write(f"\033[{n}A")
-    sys.stdout.write("\r")
-    sys.stdout.flush()
-
-    def rerender(new_idx):
-        nonlocal idx
-        if idx > 0:
-            sys.stdout.write(f"\033[{idx}A")
-        sys.stdout.write("\r")
-        for i in range(n):
-            if i > 0:
-                sys.stdout.write("\n")
-            prefix = "  >" if i == new_idx else "   "
-            sys.stdout.write(f"\033[2K{prefix} {_format_conv_summary(conversations[i])}")
-        sys.stdout.flush()
-        sys.stdout.write("\033[J")
-        sys.stdout.flush()
-        back = n - 1 - new_idx
-        if back > 0:
-            sys.stdout.write(f"\033[{back}A")
-        sys.stdout.write("\r")
-        sys.stdout.flush()
-        idx = new_idx
-
-    if not READLINE_AVAILABLE:
-        sys.stdout.write(f"\033[{n - idx}B\n")
-        sys.stdout.flush()
-        for i, conv in enumerate(conversations, 1):
-            print(f"  {i}. {_format_conv_summary(conv)}")
-        print()
-        try:
-            choice = input("选择编号 (直接回车取消): ").strip()
-            if not choice:
-                print("已取消。")
-                return False, config["current_model"]
-            idx = int(choice) - 1
-            if idx < 0 or idx >= n:
-                print("无效的选择。")
-                return False, config["current_model"]
-        except ValueError:
-            print("请输入有效编号。")
-            return False, config["current_model"]
-    else:
-        while True:
-            key = msvcrt.getch()
-            if key == b'\xe0':
-                key = msvcrt.getch()
-                if key == b'H':
-                    rerender((idx - 1) % n)
-                elif key == b'P':
-                    rerender((idx + 1) % n)
-            elif key == b'\r' or key == b'\n':
-                rest = n - 1 - idx
-                if rest > 0:
-                    sys.stdout.write(f"\033[{rest}B")
-                sys.stdout.write("\n")
-                sys.stdout.flush()
-                break
-            elif key == b'\x03':
-                rest = n - 1 - idx
-                if rest > 0:
-                    sys.stdout.write(f"\033[{rest}B")
-                sys.stdout.write("\n")
-                sys.stdout.flush()
-                print("已取消。")
-                return False, config["current_model"]
-            elif key == b'd' or key == b'D':
-                conv_id = conversations[idx]["id"]
-                if not delete_conversation(conv_id):
-                    rest = n - 1 - idx
-                    if rest > 0:
-                        sys.stdout.write(f"\033[{rest}B")
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-                    print(f"删除失败: {conv_id}")
-                    return False, config["current_model"]
-                new_list = list_conversations()
-                new_n = len(new_list)
-                if new_n == 0:
-                    rest = n - 1 - idx
-                    if rest > 0:
-                        sys.stdout.write(f"\033[{rest}B")
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-                    print(f"已删除会话 [{conv_id}]。暂无历史对话。")
-                    return False, config["current_model"]
-                old_idx = idx
-                if idx >= new_n:
-                    idx = new_n - 1
-                conversations.clear()
-                conversations.extend(new_list)
-                n = new_n
-
-                # 从当前位置（被删项所在行）开始，只把后面的会话依次往上覆盖
-                # 上面的行保持不动，视觉上就是"下面的自动往上顶"
-                rewrite_count = n - old_idx
-                if rewrite_count > 0:
-                    for i in range(rewrite_count):
-                        write_i = old_idx + i
-                        prefix = "  >" if write_i == idx else "   "
-                        sys.stdout.write(f"\033[2K{prefix} {_format_conv_summary(conversations[write_i])}")
-                        if i < rewrite_count - 1:
-                            sys.stdout.write("\n")
-                    # 清除底部残留的旧行
-                    sys.stdout.write("\033[J")
-                    # 光标回到选中项所在行
-                    back = n - 1 - idx
-                    if back > 0:
-                        sys.stdout.write(f"\033[{back}A")
-                else:
-                    # 删除了最后一项：清除该行，然后上移更新新选中项的标记
-                    sys.stdout.write("\033[2K")
-                    move_up = old_idx - idx
-                    if move_up > 0:
-                        sys.stdout.write(f"\033[{move_up}A")
-                    sys.stdout.write("\r")
-                    sys.stdout.write(f"\033[2K  > {_format_conv_summary(conversations[idx])}")
-
-                sys.stdout.write("\r")
-                sys.stdout.flush()
+    if action != "selected" or idx is None:
+        return False, config["current_model"]
 
     chosen = conversations[idx]
     history_model = chosen.get("model")
@@ -316,3 +353,79 @@ def resume_conversation(config, llm_ref, state):
                 print(f"\nAI: {strip_markdown_bold(content)}")
         print()
     return True, history_model
+
+
+def rewind_conversation(config, llm_ref, state):
+    """
+    /rewind 命令：回退到某一条用户消息之前（不删除该消息本身）。
+    列表只展示用户发送过的消息。选中后：
+      - state["messages"] 截断到该用户消息之前（不含它）
+      - state["current_conv"]["messages"] 同步截断
+      - 持久化到磁盘
+      - 返回该用户消息原文，让主循环填入对话框
+    取消或无可回退消息时返回 None。
+    """
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    messages = state.get("messages", [])
+    if len(messages) <= 1:
+        print("没有可回退的用户消息。")
+        return None
+
+    user_entries = []
+    for i, msg in enumerate(messages):
+        if isinstance(msg, HumanMessage):
+            user_entries.append((i, msg.content))
+
+    if not user_entries:
+        print("没有用户消息可回退。")
+        return None
+
+    items = []
+    for seq, (_, content) in enumerate(user_entries, 1):
+        preview = strip_markdown_bold((content or "").strip().replace("\n", " "))
+        if len(preview) > 60:
+            preview = preview[:60] + "…"
+        items.append(f"#{seq}  {preview}")
+
+    idx, action = _interactive_picker(
+        items,
+        header="用户消息列表（选择要回退到哪一条之前）:",
+        hint="提示: ↑ 回到更早的消息  Enter 确认",
+        start_index=len(items) - 1,
+    )
+
+    if action != "selected" or idx is None:
+        print("已取消。")
+        return None
+
+    selected_msg_index, selected_content = user_entries[idx]
+
+    state["messages"] = messages[:selected_msg_index]
+
+    new_conv_msgs = []
+    for m in state["messages"][1:]:
+        if isinstance(m, HumanMessage):
+            new_conv_msgs.append({"role": "user", "content": m.content})
+        elif isinstance(m, AIMessage):
+            new_conv_msgs.append({"role": "assistant", "content": m.content})
+    state["current_conv"]["messages"] = new_conv_msgs
+
+    save_conversation(state["current_conv"])
+
+    reset_screen_visual()
+    print(
+        f"已回退到 #{idx + 1} 消息之前，"
+        f"共删除 {len(user_entries) - idx} 条用户消息及其后续 AI 回复。"
+    )
+    if new_conv_msgs:
+        print("\n--- 当前对话内容 ---")
+        for m in new_conv_msgs:
+            role = m.get("role")
+            content = m.get("content", "")
+            if role == "user":
+                print(f"\nYou: {strip_markdown_bold(content)}")
+            elif role == "assistant":
+                print(f"\nAI: {strip_markdown_bold(content)}")
+        print()
+    return selected_content

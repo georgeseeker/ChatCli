@@ -6,6 +6,7 @@ from cache import (
     new_conversation,
     reset_screen_visual,
     resume_conversation,
+    rewind_conversation,
     save_conversation,
 )
 from config import (
@@ -114,6 +115,18 @@ def run_chat():
             if user_input == "/resume":
                 resume_conversation(config, llm_ref, state)
                 continue
+
+            if user_input == "/rewind":
+                prefill = rewind_conversation(config, llm_ref, state)
+                if prefill is None:
+                    continue
+                print("[Rewind] 直接回车按原内容发送，或输入修改后的内容（/cancel 取消）:")
+                edit = input("> ").strip()
+                if edit == "/cancel":
+                    print("已取消。")
+                    continue
+                user_input = edit if edit else prefill
+                # 落入下方的常规消息处理流程
 
             if user_input == "/exit":
                 print("再见!")
