@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 
 from config import get_current_model_config, save_config
-from utils import READLINE_AVAILABLE
+from utils import READLINE_AVAILABLE, strip_markdown_bold
 
 if sys.platform == "win32":
     import msvcrt
@@ -99,7 +99,7 @@ def _format_conv_summary(conv):
     first_user = ""
     for m in msgs:
         if m.get("role") == "user":
-            first_user = (m.get("content") or "").strip().replace("\n", " ")
+            first_user = strip_markdown_bold((m.get("content") or "").strip()).replace("\n", " ")
             break
     if len(first_user) > 40:
         first_user = first_user[:40] + "…"
@@ -124,7 +124,6 @@ def resume_conversation(config, llm_ref, state):
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
     from langchain_openai import ChatOpenAI
 
-    from utils import strip_markdown_bold
     conversations = list_conversations()
     if not conversations:
         print("暂无历史对话。")
@@ -312,7 +311,7 @@ def resume_conversation(config, llm_ref, state):
             role = m.get("role")
             content = m.get("content", "")
             if role == "user":
-                print(f"\nYou: {content}")
+                print(f"\nYou: {strip_markdown_bold(content)}")
             elif role == "assistant":
                 print(f"\nAI: {strip_markdown_bold(content)}")
         print()

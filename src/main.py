@@ -126,17 +126,42 @@ def run_chat():
             if config.get("stream"):
                 print("\nAI: ", end="", flush=True)
                 response_content = ""
+                in_bold = False
+                carry = ""
                 for chunk in llm_ref["llm"].stream(state["messages"]):
-                    if chunk.content:
-                        content = strip_markdown_bold(chunk.content)
-                        print(content, end="", flush=True)
-                        response_content += content
+                    if not chunk.content:
+                        continue
+                    text = carry + chunk.content
+                    carry = text[-1] if text and text[-1] == "*" else ""
+                    processable = text[:-1] if carry else text
+                    out_chars = []
+                    i = 0
+                    while i < len(processable):
+                        if (
+                            processable[i] == "*"
+                            and i + 1 < len(processable)
+                            and processable[i + 1] == "*"
+                        ):
+                            in_bold = not in_bold
+                            i += 2
+                        else:
+                            out_chars.append(processable[i])
+                            i += 1
+                    out_str = "".join(out_chars)
+                    print(out_str, end="", flush=True)
+                    response_content += out_str
+                if carry:
+                    if not in_bold:
+                        response_content += carry
+                        print(carry, end="", flush=True)
+                    carry = ""
                 print()
                 response = AIMessage(content=response_content)
             else:
                 response = llm_ref["llm"].invoke(state["messages"])
                 content = strip_markdown_bold(response.content)
                 print(f"\nAI: {content}")
+                response = AIMessage(content=content)
 
             state["messages"].append(response)
             state["current_conv"]["messages"].append(
