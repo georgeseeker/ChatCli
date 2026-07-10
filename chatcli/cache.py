@@ -11,7 +11,7 @@ from chatcli.config import (
     get_current_model_config,
     save_config,
 )
-from chatcli.utils import print_user_block, strip_markdown_bold
+from chatcli.utils import _truncate_to_width, display_width, get_terminal_width, print_user_block, strip_markdown_bold
 
 if sys.platform == "win32":
     import msvcrt
@@ -144,6 +144,15 @@ def _interactive_picker(items, header, hint, on_delete=None, start_index=0):
     idx = max(0, min(start_index, n - 1))
     use_interactive = sys.platform == "win32"
 
+    # 可用宽度：保留前缀空间（"  > " = 4 列）并留 1 列余量防终端自动折行
+    _avail_width = max(1, get_terminal_width() - 5)
+
+    def _truncate_item(text, max_w):
+        """按显示宽度截断文本，确保不超出 max_w 列。"""
+        if display_width(text) <= max_w:
+            return text
+        return _truncate_to_width(text, max_w - 1) + "…"
+
     if not use_interactive:
         print(f"\n{header}")
         if hint:
@@ -177,7 +186,8 @@ def _interactive_picker(items, header, hint, on_delete=None, start_index=0):
         if i > 0:
             sys.stdout.write("\n")
         prefix = "  >" if i == idx else "   "
-        sys.stdout.write(f"\033[2K{prefix} {item}")
+        _trunc = _truncate_item(item, _avail_width)
+        sys.stdout.write(f"\033[2K{prefix} {_trunc}")
     sys.stdout.flush()
 
     # 光标回到高亮那一行（而非首行），使初始视觉与 start_index 一致
@@ -196,7 +206,8 @@ def _interactive_picker(items, header, hint, on_delete=None, start_index=0):
             if i > 0:
                 sys.stdout.write("\n")
             prefix = "  >" if i == new_idx else "   "
-            sys.stdout.write(f"\033[2K{prefix} {items[i]}")
+            _trunc = _truncate_item(items[i], _avail_width)
+            sys.stdout.write(f"\033[2K{prefix} {_trunc}")
         sys.stdout.flush()
         sys.stdout.write("\033[J")
         sys.stdout.flush()
@@ -253,7 +264,8 @@ def _interactive_picker(items, header, hint, on_delete=None, start_index=0):
                 for i in range(rewrite_count):
                     write_i = old_idx + i
                     prefix = "  >" if write_i == idx else "   "
-                    sys.stdout.write(f"\033[2K{prefix} {items[write_i]}")
+                    _trunc = _truncate_item(items[write_i], _avail_width)
+                    sys.stdout.write(f"\033[2K{prefix} {_trunc}")
                     if i < rewrite_count - 1:
                         sys.stdout.write("\n")
                 sys.stdout.write("\033[J")
@@ -266,7 +278,8 @@ def _interactive_picker(items, header, hint, on_delete=None, start_index=0):
                 if move_up > 0:
                     sys.stdout.write(f"\033[{move_up}A")
                 sys.stdout.write("\r")
-                sys.stdout.write(f"\033[2K  > {items[idx]}")
+                _trunc = _truncate_item(items[idx], _avail_width)
+                sys.stdout.write(f"\033[2K  > {_trunc}")
             sys.stdout.write("\r")
             sys.stdout.flush()
 
@@ -644,9 +657,9 @@ def _prepare_export_destination(path, conv_id):
             except OSError as e:
                 print(f"错误: 无法创建目录 {parent}: {e}")
                 return None
-        if not os.path.isdir(parent):
-            print(f"错误: 目录不存在且无法创建: {parent}")
-            return None
+            if not os.path.isdir(parent):
+                print(f"错误: 目录不存在且无法创建: {parent}")
+                return None
         final_path = os.path.join(parent, f"{conv_id}.json")
     else:
         _, ext = os.path.splitext(path)
@@ -666,7 +679,7 @@ def _prepare_export_destination(path, conv_id):
                     print(f"错误: 无权限创建目录: {parent}")
                     return None
                 except OSError as e:
-                    print(f"错误: 目录不存在且无法创建 {parent}: {e}")
+                    print(f"错误: 无法创建目录 {parent}: {e}")
                     return None
                 if not os.path.isdir(parent):
                     print(f"错误: 目录不存在且无法创建: {parent}")
