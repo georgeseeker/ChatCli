@@ -279,6 +279,36 @@ ChatCli 命令帮助
     /import /home/你/Downloads/chat.json
 
 ----------------------------------------------------------------------
+/import grok [url]
+  作用: 直接从本地 Chrome 中已打开 / 指定的 grok.com 对话页抓取并导入，
+        相当于把 Grok-Exporter 浏览器插件的功能做进 ChatCli。
+  说明:
+    - 无 url：抓当前已打开的 grok.com 对话页（URL 应形如 /c/<uuid>）
+    - 带 url：让本地 Chrome 新开标签跳到该 URL，再抓
+    - 复用本机 Chrome 的用户配置，登录态不丢
+    - 抓取逻辑见 chatcli/fetchers/grok.{py,js}
+    - 导入后写入 ~/.chatcli/.cache/，之后不再依赖源页面
+  前置要求（重要）:
+    - 启动 Chrome 时必须附 --remote-debugging-port=9222，
+      并用 --user-data-dir 指到本机默认用户配置目录（重要！
+      这样能复用正在用的 Chrome 的登录态，grok.com 的会话不丢）。
+      如果 Chrome 已经在跑，先关掉再走下面这条命令启动。
+        Windows (PowerShell):
+          & "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" `
+             --remote-debugging-port=9222 `
+             --user-data-dir="$env:LOCALAPPDATA\\Google\\Chrome\\User Data"
+        macOS:
+          open -a "Google Chrome" --args \
+             --remote-debugging-port=9222 \
+             --user-data-dir="$HOME/Library/Application Support/Google/Chrome"
+    - 若用了别的端口，请写入 ~/.chatcli/config.json:
+          "cdp_port": <你的端口>
+      （默认 9222）
+  用法:
+    /import grok
+    /import grok https://grok.com/c/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+----------------------------------------------------------------------
 /export <绝对路径>
   作用: 把某条本机历史会话导出成 JSON，方便备份或再 /import。
   说明:

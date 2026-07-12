@@ -578,6 +578,18 @@ def _import_conversation_impl(path, config, state):
         print(f"错误: JSON 格式不符合会话结构: {e}")
         return False
 
+    return apply_imported_messages(imported, config, state, source_label="文件")
+
+
+def apply_imported_messages(imported, config, state, source_label="文件"):
+    """
+    共享的"导入完成"步骤：把已规范化的消息列表落盘 + 装入 state + 清屏 + 回放。
+
+    source_label 仅用于成功时的提示文本（"文件"/"grok"），不影响行为。
+    返回 True。
+    """
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
     # 切换前持久化当前非空会话
     current_conv = state.get("current_conv")
     if current_conv and current_conv.get("messages"):
@@ -602,9 +614,11 @@ def _import_conversation_impl(path, config, state):
     state["current_conv"] = conv
 
     reset_screen_visual()
+    dep_note = "" if source_label == "文件" else "（已写入历史，不再依赖源 URL）"
     print(
-        f"已导入会话 [{conv['id']}]，消息数: {len(imported)}，"
-        f"模型: {model}（已写入历史，不再依赖源文件）"
+        f"已导入{('来自 ' + source_label + ' 的') if source_label != '文件' else ''}会话"
+        f" [{conv['id']}]，消息数: {len(imported)}，"
+        f"模型: {model}{dep_note}"
     )
     print("\n--- 导入的对话内容 ---")
     for m in imported:

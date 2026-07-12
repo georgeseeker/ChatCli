@@ -1,6 +1,7 @@
 import sys
 
 from chatcli.cache import (
+    apply_imported_messages,
     export_conversation,
     import_conversation,
     new_conversation,
@@ -36,6 +37,57 @@ def trim_history(messages, max_history_messages):
         history = history[-max_history_messages:]
 
     return [system_message] + history
+
+
+def handle_import_grok(rest, config, state):
+    """
+    /import grok [url] 处理：
+      - 无 url：抓当前打开的 grok.com 对话页
+      - 有 url：让本地 Chrome 新开一个标签并跳过去，再抓
+
+    任何 CDP 错误已经在 fetch_and_normalize 里就地打印，这里只做结果分发。
+    """
+    from chatcli.cdp import CDPRefused
+    from chatcli.fetchers import grok as grok_fetcher
+
+    parts = rest.split(maxsplit=1)
+    url = parts[1].strip() if len(parts) > 1 else ""
+    url = url or None
+    port = config.get("cdp_port", 9222)
+
+    # 端口探测：用户经常忘记加 --remote-debugging-port，
+    # 或者开了 Chrome 但忘了关掉再用带 user-data-dir 的命令启动——都打这里提示。
+    try:
+        from chatcli.cdp import browser_is_up
+        if not browser_is_up(port):
+            print("错误: 无法连接本地 Chrome 的远程调试端口")
+            print(f"  当前端口: {port}")
+            print("  请用以下方式启动 Chrome 再试一次（--user-data-dir 必须指到本机默认配置目录，")
+            print("  否则登录态不共享）。Chrome 已在跑的话先关掉再启动。")
+            print("    Windows (PowerShell):")
+            print('      & "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" `')
+            print("           --remote-debugging-port=9222 `")
+            print('           --user-data-dir="$env:LOCALAPPDATA\\Google\\Chrome\\User Data"')
+            print("    macOS:")
+            print('      open -a "Google Chrome" --args \\')
+            print("           --remote-debugging-port=9222 \\")
+            print('           --user-data-dir="$HOME/Library/Application Support/Google/Chrome"')
+            print("  若使用了别的端口，可在 ~/.chatcli/config.json 里加：")
+            print('    "cdp_port": <你的端口>')
+            return
+    except CDPRefused as e:
+        print(f"错误: {e}")
+        return
+
+    msgs = grok_fetcher.fetch_and_normalize(port=port, url=url)
+    if msgs is None:
+        # fetcher 已经就地打印了错误
+        return
+    if not msgs:
+        print("错误: 从 grok.com 抓回的内容为空，没法导入")
+        return
+
+    apply_imported_messages(msgs, config, state, source_label="grok")
 
 
 def _import_llm_deps():
@@ -141,8 +193,13 @@ def run_chat():
                 continue
 
             if user_input == "/import" or user_input.startswith("/import "):
-                path = user_input[len("/import") :].strip()
-                import_conversation(path, config, state)
+                rest = user_input[len("/import") :].strip()
+                # /import grok [url] — 直接从打开/指定的 grok 对话页抓取
+                if rest == "grok" or rest.startswith("grok "):
+                    handle_import_grok(rest, config, state)
+                    continue
+                # 否则按文件路径走
+                import_conversation(rest, config, state)
                 continue
 
             if user_input == "/export" or user_input.startswith("/export "):

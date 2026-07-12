@@ -16,7 +16,12 @@ keywords = ["llm", "chat", "cli", "console"]
 dependencies = [
     "langchain-core>=0.3.0",
     "langchain-openai>=0.2.0",
+    "websockets>=10.0",
 ]
+# 包内随源码分发的资源（fetchers/*.js 被 grok.py 通过 importlib.resources 读）
+[tool.setuptools.package-data]
+chatcli = ["fetchers/*.js"]
+
 
 [project.urls]
 Homepage = "https://github.com/georgeseeker/ChatCli"

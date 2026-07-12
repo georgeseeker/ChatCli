@@ -190,6 +190,41 @@ python -m chatcli
 
 ---
 
+### 第 5 步的 快捷选项：直接从 Chrome 里的 grok.com 对话页抓取
+
+如果喜欢前面的（导出 JSON 再导入）流程，你也可以省掉 Grok-Exporter 插件，直接让 ChatCli 自己跑进 Chrome 里抓：
+
+前置：用 `--remote-debugging-port=9222` 启动 Chrome，**同时把 `--user-data-dir` 指到本机默认的用户配置目录**，这样能和正在用的 Chrome 共享登录态（grok.com 的会话不丢）。端口可改，之后在 `~/.chatcli/config.json` 写上 `"cdp_port": <端口>`，默认就是 9222。
+
+- Windows (PowerShell)：
+    ```powershell
+    & "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+      --remote-debugging-port=9222 `
+      --user-data-dir="$env:LOCALAPPDATA\Google\Chrome\User Data"
+    ```
+- macOS：
+    ```bash
+    open -a "Google Chrome" --args \
+      --remote-debugging-port=9222 \
+      --user-data-dir="$HOME/Library/Application Support/Google/Chrome"
+    ```
+
+> 为什么要加 `--user-data-dir`：Chrome 默认每个新进程用独立 user data 目录。指向本机默认那个（上面写的路径），就等于让调试 Chrome 接管你日常那个 Chrome 的会话——书签、登录态都现成的。如果 Chrome 已经在跑，先关掉再走这条命令启动。
+
+你进 https://grok.com 并登录后点开任何一个对话，然后在 ChatCli 里：
+
+```text
+/import grok
+```
+
+带 URL 的话，ChatCli 会让 Chrome 新开一个标签并把 ChatCli 投到那个标签里抓：
+
+```text
+/import grok https://grok.com/c/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+原理与 Grok-Exporter 插件相同：通过 Chrome DevTools Protocol 在对话页运行 grok.js，抽取 user/ai 消息再导入。
+
 ## 常用命令（聊天窗口里输入）
 
 | 命令 | 作用 |
@@ -200,6 +235,7 @@ python -m chatcli
 | `/model` | 切换模型 |
 | `/resume` | 从历史记录里恢复以前的会话 |
 | `/import 绝对路径` | 导入 JSON（配合 AI Exporter） |
+| `/import grok [url]` | 直接从已打开 / 指定的 grok.com 对话页抓取并导入（无需插件） |
 | `/export 绝对路径` | 把某条历史导出成 JSON |
 | `/rewind` | 回退到某条用户消息，可改写重发 |
 | `/exit` | 退出 |
