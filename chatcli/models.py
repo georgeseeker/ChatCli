@@ -1,15 +1,18 @@
-import sys
-
-from chatcli.config import get_api_key, get_current_model_config, get_model_list, save_config
-from chatcli.utils import READLINE_AVAILABLE
-
-if sys.platform == "win32":
-    import msvcrt
+from chatcli.cache import _interactive_picker
+from chatcli.config import (
+    get_api_key,
+    get_current_model_config,
+    get_model_list,
+    save_config,
+)
 
 
 def switch_model(config, llm_ref):
     """
-    切换模型
+    切换模型。
+    复用 /resume 的 _interactive_picker：
+      - Windows: ↑↓ 上下键 + Enter 确认，Ctrl-C 取消
+      - 其它平台: 退化为编号输入
     llm_ref: 包含 llm 的可变引用，用于更新
     """
     from langchain_openai import ChatOpenAI
@@ -21,57 +24,24 @@ def switch_model(config, llm_ref):
         print("没有可用模型")
         return current
 
-    print("\n可用模型:")
+    items = []
+    current_idx = 0
+    for i, cfg in enumerate(model_list):
+        name = cfg.get("model")
+        marker = " [当前]" if name == current else ""
+        items.append(f"{name}{marker}")
+        if name == current:
+            current_idx = i
 
-    def print_selection(idx):
-        for i, cfg in enumerate(model_list):
-            name = cfg.get("model")
-            marker = ""
-            if name == current:
-                marker = " [当前]"
-            prefix = "  >" if i == idx else "   "
-            print(f"\033[K{prefix} {name}{marker}")
-        print(f"\033[{len(model_list)}A", end="")
+    idx, action = _interactive_picker(
+        items,
+        header="可用模型:",
+        hint="提示: ↑↓ 选择  Enter 确认  Esc/Ctrl-C 取消",
+        start_index=current_idx,
+    )
 
-    if not READLINE_AVAILABLE:
-        for i, cfg in enumerate(model_list, 1):
-            name = cfg.get("model")
-            marker = " [当前]" if name == current else ""
-            print(f"  {i}. {name}{marker}")
-        print()
-        try:
-            choice = input("选择模型编号 (直接回车取消): ").strip()
-            if not choice:
-                print("已取消。")
-                return current
-            idx = int(choice) - 1
-            if idx < 0 or idx >= len(model_list):
-                print("无效的选择。")
-                return current
-        except ValueError:
-            print("请输入有效编号。")
-            return current
-    else:
-        idx = 0
-        print_selection(idx)
-
-        while True:
-            key = msvcrt.getch()
-
-            if key == b'\xe0':
-                key = msvcrt.getch()
-                if key == b'H':
-                    idx = (idx - 1) % len(model_list)
-                    print_selection(idx)
-                elif key == b'P':
-                    idx = (idx + 1) % len(model_list)
-                    print_selection(idx)
-            elif key == b'\r' or key == b'\n':
-                print()
-                break
-            elif key == b'\x03':
-                print("\n已取消。")
-                return current
+    if action != "selected" or idx is None:
+        return current
 
     new_model = model_list[idx].get("model")
     if new_model == current:
@@ -87,7 +57,7 @@ def switch_model(config, llm_ref):
         api_key=get_api_key(config),
         base_url=model_config["base_url"],
         temperature=config.get("temperature", 0.7),
-        streaming=config.get("stream", False)
+        streaming=config.get("stream", False),
     )
     llm_ref["llm"] = new_llm
 

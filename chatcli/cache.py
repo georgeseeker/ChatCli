@@ -241,7 +241,7 @@ def _interactive_picker(items, header, hint, on_delete=None, start_index=0):
             sys.stdout.write("\n")
             sys.stdout.flush()
             return idx, "selected"
-        elif key == b"\x03":
+        elif key == b"\x03" or key == b"\x1b":
             bail_with_message("已取消。")
             return None, "cancelled"
         elif on_delete is not None and (key == b"d" or key == b"D"):
@@ -316,7 +316,7 @@ def resume_conversation(config, llm_ref, state):
     idx, action = _interactive_picker(
         items,
         header="历史对话:",
-        hint="提示: ↑↓ 选择  Enter 确认  d 删除",
+        hint="提示: ↑↓ 选择  Enter 确认  d 删除  Esc/Ctrl-C 取消",
         on_delete=on_delete,
     )
 
