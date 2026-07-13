@@ -300,8 +300,8 @@ pip uninstall chatcli
 ```
 ChatCli/
   pyproject.toml    # 打包与依赖，安装时自动装包
-  main.py           # 可选：python main.py
   chatcli/          # 程序源码
+    __main__.py     # python -m chatcli 入口
     main.py         # 启动与聊天循环
     config.py       # 配置与用户目录
     cache.py        # 历史、导入导出
