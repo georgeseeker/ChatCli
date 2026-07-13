@@ -35,7 +35,16 @@ DEFAULT_CONFIG = {
     "current_model": "deepseek-v4-flash",
     "temperature": 0.7,
     "stream": True,
+    # /import grok 专用 Chrome user-data-dir；首次使用时会要求用户输入并落盘
+    "cdp_user_data_dir": "",
+    # /import grok 调试端口；首次使用时会要求用户输入（默认 9222）并落盘
+    "cdp_port": 9222,
 }
+
+
+# /import grok 首次让用户输入 Chrome user-data-dir 时给的默认值（跨平台）
+_DEFAULT_CDP_USER_DATA_DIR = str(Path.home() / "chrome-cdp-profile")
+_DEFAULT_CDP_PORT = 9222
 
 
 def write_default_config():
@@ -199,6 +208,78 @@ def save_config(config):
         print(f"错误: 无法写入配置文件 {CONFIG_PATH}: {e}")
 
 
+def get_cdp_user_data_dir(config):
+    """返回 config 里登记的 CDP Chrome user-data-dir；空字符串视为未配置（返回 None）。"""
+    value = config.get("cdp_user_data_dir")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def get_cdp_port(config):
+    """返回 config 里登记的 CDP 端口；缺省或非法时回退到 9222。"""
+    raw = config.get("cdp_port", _DEFAULT_CDP_PORT)
+    try:
+        port = int(raw)
+        if 1 <= port <= 65535:
+            return port
+    except (TypeError, ValueError):
+        pass
+    return _DEFAULT_CDP_PORT
+
+
+def prompt_first_run_cdp_setup(config):
+    """首次 /import grok 时让用户输入 Chrome profile 目录与端口，写回 config.json。
+
+    跨平台默认：profile 在 ~/chrome-cdp-profile（用 Path.home() 拼），
+    端口默认 9222。两项都直接回车采用默认值，输入新值则覆盖。
+    已通过 config 校验过的字段不会被重新问（main.handle_import_grok
+    应当在缺一不可时才调用本函数）。
+    """
+    ensure_chatcli_home()
+
+    default_dir = _DEFAULT_CDP_USER_DATA_DIR  # 跨平台：~/chrome-cdp-profile
+    default_port = _DEFAULT_CDP_PORT           # 9222
+
+    print()
+    print("首次使用 /import grok，需要指定两个参数：")
+    print("  1) Chrome profile 目录：用来保存 grok.com 登录态，")
+    print("     必须独立于日常 Chrome（避免和正在运行的 Chrome 抢同一份 profile）。")
+    print(f"     默认 [{default_dir}]（跨平台 = ~/chrome-cdp-profile），直接回车采用。")
+    print("  2) 调试端口：Chrome --remote-debugging-port 用，")
+    print(f"     默认 [{default_port}]，直接回车采用。")
+    print()
+
+    # 1. profile 目录
+    try:
+        raw_dir = input(f"Chrome profile 目录 [{default_dir}]: ").strip()
+    except EOFError:
+        raw_dir = ""
+    chosen_dir = raw_dir or default_dir
+    chosen_dir = os.path.abspath(os.path.expanduser(chosen_dir))
+
+    # 2. 端口
+    try:
+        raw_port = input(f"调试端口 [{default_port}]: ").strip()
+    except EOFError:
+        raw_port = ""
+    chosen_port_raw = raw_port or str(default_port)
+    try:
+        chosen_port = int(chosen_port_raw)
+        if not (1 <= chosen_port <= 65535):
+            raise ValueError
+    except ValueError:
+        print(f"  端口非法，回退到默认 {default_port}")
+        chosen_port = default_port
+
+    config["cdp_user_data_dir"] = chosen_dir
+    config["cdp_port"] = chosen_port
+    save_config(config)
+    print(f"已记录: cdp_user_data_dir = {chosen_dir}")
+    print(f"已记录: cdp_port = {chosen_port}")
+    print()
+
+
 def get_current_model_config(config):
     """获取当前模型的配置"""
     current = config["current_model"]
@@ -285,25 +366,21 @@ ChatCli 命令帮助
   说明:
     - 无 url：抓当前已打开的 grok.com 对话页（URL 应形如 /c/<uuid>）
     - 带 url：让本地 Chrome 新开标签跳到该 URL，再抓
-    - 复用本机 Chrome 的用户配置，登录态不丢
     - 抓取逻辑见 chatcli/fetchers/grok.{py,js}
     - 导入后写入 ~/.chatcli/.cache/，之后不再依赖源页面
-  前置要求（重要）:
-    - 启动 Chrome 时必须附 --remote-debugging-port=9222，
-      并用 --user-data-dir 指到本机默认用户配置目录（重要！
-      这样能复用正在用的 Chrome 的登录态，grok.com 的会话不丢）。
-      如果 Chrome 已经在跑，先关掉再走下面这条命令启动。
-        Windows (PowerShell):
-          & "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" `
-             --remote-debugging-port=9222 `
-             --user-data-dir="$env:LOCALAPPDATA\\Google\\Chrome\\User Data"
-        macOS:
-          open -a "Google Chrome" --args \
-             --remote-debugging-port=9222 \
-             --user-data-dir="$HOME/Library/Application Support/Google/Chrome"
-    - 若用了别的端口，请写入 ~/.chatcli/config.json:
-          "cdp_port": <你的端口>
-      （默认 9222）
+  自动启动（不需要预先手动起 Chrome）:
+    - CDP 未监听时，chatcli 会自动拉起一个后台 Chrome 进程。首次运行
+      会一次性问你两个参数（回车即采用默认值），写入 ~/.chatcli/config.json：
+        * Chrome profile 目录：默认 ~/chrome-cdp-profile（跨平台），
+          必须独立于日常 Chrome
+        * 调试端口：默认 9222
+      写入后再次 /import grok 不再问，沿用已起的 Chrome 实例 + 配置
+    - profile 必须独立于日常 Chrome（现代 Chrome 禁止两个进程共享
+      同一份默认 profile）。首次需要在该 profile 下手动登录 grok.com
+    - 已配置后想改值，直接编辑 ~/.chatcli/config.json 里的 cdp_user_data_dir
+      或 cdp_port 字段即可
+  备选：在 ~/.chatcli/config.json 里显式指定 Chrome 路径：
+          "chrome_executable": "C:\\path\\to\\chrome.exe"
   用法:
     /import grok
     /import grok https://grok.com/c/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
@@ -377,6 +454,11 @@ def print_config(config):
   temperature: {config.get("temperature", 0.7)}
   stream: {config.get("stream", False)}
   api_key: {api_key_display}
+
+CDP 配置（/import grok）:
+  cdp_port: {config.get("cdp_port", 9222)}
+  cdp_user_data_dir: {config.get("cdp_user_data_dir") or "(未配置，首次 /import grok 时会让你输入)"}
+  chrome_executable: {config.get("chrome_executable") or "(自动探测)"}
 """)
 
 

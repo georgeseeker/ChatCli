@@ -45,39 +45,60 @@ def handle_import_grok(rest, config, state):
       - 无 url：抓当前打开的 grok.com 对话页
       - 有 url：让本地 Chrome 新开一个标签并跳过去，再抓
 
-    任何 CDP 错误已经在 fetch_and_normalize 里就地打印，这里只做结果分发。
+    CDP 未启时自动拉起本地 Chrome（独立 user-data-dir），不需要用户先手动起。
+    任何 CDP 错误已经在 fetch_and_normalize / launch_chrome_cdp 里就地打印，这里只做结果分发。
     """
-    from chatcli.cdp import CDPRefused
+    from chatcli.cdp import (
+        CDPError,
+        ChromeNotFound,
+        browser_is_up,
+        find_chrome_executable,
+        launch_chrome_cdp,
+    )
+    from chatcli.config import (
+        get_cdp_port,
+        get_cdp_user_data_dir,
+        prompt_first_run_cdp_setup,
+    )
     from chatcli.fetchers import grok as grok_fetcher
 
     parts = rest.split(maxsplit=1)
     url = parts[1].strip() if len(parts) > 1 else ""
     url = url or None
-    port = config.get("cdp_port", 9222)
 
-    # 端口探测：用户经常忘记加 --remote-debugging-port，
-    # 或者开了 Chrome 但忘了关掉再用带 user-data-dir 的命令启动——都打这里提示。
-    try:
-        from chatcli.cdp import browser_is_up
-        if not browser_is_up(port):
-            print("错误: 无法连接本地 Chrome 的远程调试端口")
-            print(f"  当前端口: {port}")
-            print("  请用以下方式启动 Chrome 再试一次（--user-data-dir 必须指到本机默认配置目录，")
-            print("  否则登录态不共享）。Chrome 已在跑的话先关掉再启动。")
-            print("    Windows (PowerShell):")
-            print('      & "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" `')
-            print("           --remote-debugging-port=9222 `")
-            print('           --user-data-dir="$env:LOCALAPPDATA\\Google\\Chrome\\User Data"')
-            print("    macOS:")
-            print('      open -a "Google Chrome" --args \\')
-            print("           --remote-debugging-port=9222 \\")
-            print('           --user-data-dir="$HOME/Library/Application Support/Google/Chrome"')
-            print("  若使用了别的端口，可在 ~/.chatcli/config.json 里加：")
-            print('    "cdp_port": <你的端口>')
+    # 端口未起 → 让 chatcli 自己拉起 Chrome
+    if not browser_is_up(config.get("cdp_port", 9222)):
+        user_data_dir = get_cdp_user_data_dir(config)
+        if not user_data_dir:
+            # 首次使用：让用户输入 profile 目录 + 端口，写入 config.json
+            prompt_first_run_cdp_setup(config)
+        # 读回（可能被 prompt 更新过 port）
+        port = get_cdp_port(config)
+        user_data_dir = get_cdp_user_data_dir(config)
+
+        try:
+            chrome_path = find_chrome_executable()
+        except ChromeNotFound as e:
+            print(f"错误: {e}")
+            print(
+                "  备选：在 ~/.chatcli/config.json 里加 'chrome_executable' "
+                "指向本地 Chrome 绝对路径后重试。"
+            )
             return
-    except CDPRefused as e:
-        print(f"错误: {e}")
-        return
+
+        print(f"启动 Chrome CDP 模式（port={port}，profile={user_data_dir}）...")
+        try:
+            launch_chrome_cdp(
+                chrome_path=chrome_path,
+                port=port,
+                user_data_dir=user_data_dir,
+            )
+        except CDPError as e:
+            print(f"错误: {e}")
+            return
+        print("Chrome CDP 已就绪。")
+    else:
+        port = config.get("cdp_port", 9222)
 
     msgs = grok_fetcher.fetch_and_normalize(port=port, url=url)
     if msgs is None:

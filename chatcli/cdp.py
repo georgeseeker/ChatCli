@@ -3,28 +3,28 @@
 设计目标：
   - 仅依赖 stdlib + websockets（已在依赖里），便于跨平台打包
   - 只暴露 fetcher 真正用到的高层 API：找标签 / 开标签 / 注入 JS
+  - 提供 launch_chrome_cdp() 让调用方在 CDP 未启时拉起本地 Chrome
+    （用专用的 user-data-dir，不复用日常 Chrome 配置——现代 Chrome
+    已禁止调试进程直接占用本机默认 profile）
   - 异常类型明确（CDPError / CDPRefused / CDPNoTab / CDPEvalError），
     上层（fetchers/grok.py + main.py）按类区分处理
 
-前置要求（启动 Chrome 时附上；--user-data-dir 指到本机默认配置目录，
-这样能复用正在用的 Chrome 的登录态）：
-  Windows (PowerShell)：
-    & "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" `
-       --remote-debugging-port=9222 `
-       --user-data-dir="$env:LOCALAPPDATA\\Google\\Chrome\\User Data"
-  macOS：
-    open -a "Google Chrome" --args \
-       --remote-debugging-port=9222 \
-       --user-data-dir="$HOME/Library/Application Support/Google/Chrome"
+自动启动：
+  通常 /import grok 由 chatcli 自动拉起 Chrome（详见
+  chatcli.main.handle_import_grok）。想手工启动一个调试实例时仍可用：
+    Chrome.exe --remote-debugging-port=9222 --user-data-dir=<profile 目录>
 
-为什么必须 --user-data-dir 指向默认那个目录：
-  Chrome 默认每个新进程用独立 user data 目录。指向本机默认那个，调试
-  Chrome 等于接管日常 Chrome 的会话——书签、登录态都现成，能直接访问
-  已登录的 grok.com。如果 Chrome 已经在跑，先关掉再走这条命令启动。
+  user-data-dir 必须是独立目录（不同于日常 Chrome 的默认配置），
+  并在 ~/.chatcli/config.json 的 cdp_user_data_dir 字段里登记。
 """
 
 import json
+import os
+import shutil
 import socket
+import subprocess
+import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -49,7 +49,12 @@ class CDPEvalError(CDPError):
     """注入的 JS 抛错或返回值结构异常。"""
 
 
+class ChromeNotFound(CDPError):
+    """在系统里找不到 Chrome 可执行文件。"""
+
+
 _DEFAULT_HTTP_TIMEOUT = 5.0  # /json/list、/json/new 之类本地 HTTP
+_LAUNCH_WAIT_TIMEOUT = 10.0  # launch_chrome_cdp 默认等待 CDP 就绪秒数
 
 
 def _http_json(url, method="GET"):
@@ -309,3 +314,161 @@ def evaluate_and_parse(ws_url, expression, timeout=10.0, await_promise=False):
         raise CDPEvalError(f"Runtime.evaluate 返回值类型不支持：{type(value).__name__}")
 
     raise last_err or CDPEvalError("Runtime.evaluate 反复失败")
+
+
+# ---------------------------------------------------------------------------
+# 自动启动 Chrome：让 /import grok 不用让用户先手动起 Chrome
+# ---------------------------------------------------------------------------
+
+_LAUNCH_POLL_INTERVAL = 0.2  # wait_for_cdp 轮询间隔
+
+
+def find_chrome_executable():
+    r"""返回 Chrome 可执行文件绝对路径；找不到抛 ChromeNotFound。
+
+    查找顺序：
+      Windows: 注册表 HKLM\...\Chrome.exe → Program Files / Program Files (x86) →
+                shutil.which("chrome") 兜底
+      macOS:   /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+      Linux:   which("google-chrome") → which("google-chrome-stable") →
+                which("chromium") → which("chromium-browser")
+    """
+    candidates = []
+
+    if sys.platform == "win32":
+        # 1. 注册表：Chrome 安装时通常写到这里
+        try:
+            import winreg  # 仅 Windows 可用
+
+            for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                for sub in (
+                    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Google Chrome",
+                    r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Google Chrome",
+                ):
+                    try:
+                        with winreg.OpenKey(hive, sub) as key:
+                            value, _ = winreg.QueryValueEx(key, "InstallLocation")
+                            if value:
+                                exe = os.path.join(value, "chrome.exe")
+                                if os.path.isfile(exe):
+                                    candidates.append(exe)
+                    except OSError:
+                        continue
+        except ImportError:
+            pass
+
+        # 2. 常见安装路径
+        pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+        pfx86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        for base in (pf, pfx86):
+            candidates.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
+
+        # 3. PATH 兜底
+        on_path = shutil.which("chrome") or shutil.which("chrome.exe")
+        if on_path:
+            candidates.append(on_path)
+
+    elif sys.platform == "darwin":
+        candidates.extend(
+            [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            ]
+        )
+        on_path = shutil.which("google-chrome") or shutil.which("Google Chrome")
+        if on_path:
+            candidates.append(on_path)
+
+    else:  # linux / 其他 unix
+        for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+            on_path = shutil.which(name)
+            if on_path:
+                candidates.append(on_path)
+
+    # 去重保序
+    seen = set()
+    for c in candidates:
+        if c and os.path.isfile(c) and c not in seen:
+            seen.add(c)
+            return c
+
+    raise ChromeNotFound(
+        "找不到 Chrome 可执行文件。请先安装 Google Chrome，或在 ~/.chatcli/config.json 里"
+        " 配置 chrome_executable 指向它的绝对路径。"
+    )
+
+
+def launch_chrome_cdp(
+    chrome_path,
+    port,
+    user_data_dir,
+    extra_args=None,
+    wait_timeout=10.0,
+):
+    """后台启动 Chrome 到 CDP 调试模式，等待端口就绪后返回。
+
+    参数：
+      chrome_path:    Chrome 可执行文件绝对路径（先调 find_chrome_executable）
+      port:           --remote-debugging-port 值
+      user_data_dir:  --user-data-dir 值（必须是独立目录；不存在会自动创建）
+      extra_args:     传给 Chrome 的额外命令行参数（list[str]，可选）
+      wait_timeout:   等待 CDP 就绪的最长秒数
+
+    进程行为：detached —— chatcli 退出后 Chrome 继续跑，下次 /import grok
+    复用同一个调试实例（也复用 profile 里的登录态）。
+
+    抛出：
+      ChromeNotFound: chrome_path 不存在
+      OSError:        创建 user_data_dir 失败 / 启动 Chrome 失败
+      CDPError:       等待超时 Chrome 仍未监听 port
+    """
+    if not chrome_path or not os.path.isfile(chrome_path):
+        raise ChromeNotFound(f"Chrome 可执行文件不存在: {chrome_path!r}")
+
+    user_data_dir = os.path.abspath(user_data_dir)
+    os.makedirs(user_data_dir, exist_ok=True)
+
+    args = [
+        chrome_path,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={user_data_dir}",
+        "--no-first-run",  # 抑制首次启动欢迎页
+        "--no-default-browser-check",
+    ]
+    if extra_args:
+        args.extend(extra_args)
+
+    # detach：Windows 用 DETACHED_PROCESS；POSIX 用 start_new_session=True
+    popen_kwargs = {
+        "args": args,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if sys.platform == "win32":
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        CREATE_NO_WINDOW = 0x08000000
+        popen_kwargs["creationflags"] = (
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        )
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    try:
+        subprocess.Popen(**popen_kwargs)
+    except OSError as e:
+        raise ChromeNotFound(f"无法启动 Chrome（{chrome_path}）：{e}") from e
+
+    # 等 CDP 端口就绪
+    deadline = time.monotonic() + wait_timeout
+    while time.monotonic() < deadline:
+        if browser_is_up(port):
+            return
+        time.sleep(_LAUNCH_POLL_INTERVAL)
+
+    raise CDPError(
+        f"已启动 Chrome 但 {wait_timeout:.0f}s 内 {port} 端口未就绪。"
+        " 请检查 Chrome 是否被安全软件拦截，或调大 wait_timeout。"
+    )

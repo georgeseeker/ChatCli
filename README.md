@@ -194,24 +194,33 @@ python -m chatcli
 
 如果喜欢前面的（导出 JSON 再导入）流程，你也可以省掉 Grok-Exporter 插件，直接让 ChatCli 自己跑进 Chrome 里抓：
 
-前置：用 `--remote-debugging-port=9222` 启动 Chrome，**同时把 `--user-data-dir` 指到本机默认的用户配置目录**，这样能和正在用的 Chrome 共享登录态（grok.com 的会话不丢）。端口可改，之后在 `~/.chatcli/config.json` 写上 `"cdp_port": <端口>`，默认就是 9222。
+> **不需要预先手动起 Chrome**：`/import grok` 会自动在后台拉起一个专用 Chrome 进程。
+>
+> CDP 未监听时，chatcli 会一次性弹出两个问题（每条都直接回车采用默认）：
+>
+> 1. **Chrome profile 目录**：默认 `~/chrome-cdp-profile`（跨平台：Windows 上是 `C:\Users\你\chrome-cdp-profile`、macOS 是 `/Users/你/chrome-cdp-profile`、Linux 是 `/home/你/chrome-cdp-profile`）。必须是独立目录——和日常 Chrome 的默认 profile 分开，不然会因 Chrome 安全策略起不来或登录态不对。
+> 2. **调试端口**：默认 `9222`。
+>
+> 回答后写入 `~/.chatcli/config.json` 的 `cdp_user_data_dir` 与 `cdp_port`。之后再跑 `/import grok` 不会重复问，直接复用已起的 Chrome 与该 profile 里的登录态。
+>
+> 之后想改值，直接编辑 `~/.chatcli/config.json` 里这两个字段即可：
+>
+> ```json
+> {
+>   "cdp_user_data_dir": "D:\\my-cdp-profile",
+>   "cdp_port": 9222
+> }
+> ```
+>
+> 想手动指定 Chrome 路径，加 `"chrome_executable": "<绝对路径>"`。
+>
+> 如果你已经有一个手动在跑的 Chrome 调试实例（带 `--remote-debugging-port`），chatcli 会直接复用，不会重复启动。
 
-- Windows (PowerShell)：
-    ```powershell
-    & "C:\Program Files\Google\Chrome\Application\chrome.exe" `
-      --remote-debugging-port=9222 `
-      --user-data-dir="$env:LOCALAPPDATA\Google\Chrome\User Data"
-    ```
-- macOS：
-    ```bash
-    open -a "Google Chrome" --args \
-      --remote-debugging-port=9222 \
-      --user-data-dir="$HOME/Library/Application Support/Google/Chrome"
-    ```
+第一次使用（或新 profile）：
 
-> 为什么要加 `--user-data-dir`：Chrome 默认每个新进程用独立 user data 目录。指向本机默认那个（上面写的路径），就等于让调试 Chrome 接管你日常那个 Chrome 的会话——书签、登录态都现成的。如果 Chrome 已经在跑，先关掉再走这条命令启动。
-
-你进 https://grok.com 并登录后点开任何一个对话，然后在 ChatCli 里：
+1. 等 chatcli 自动拉起 Chrome 后，进 https://grok.com 并在那个 profile 下登录一次（这个 profile 是独立的，所以可能要单独登录）；
+2. 打开任意一个对话；
+3. 回 ChatCli：
 
 ```text
 /import grok
@@ -235,7 +244,7 @@ python -m chatcli
 | `/model` | 切换模型 |
 | `/resume` | 从历史记录里恢复以前的会话 |
 | `/import 绝对路径` | 导入 JSON（配合 AI Exporter） |
-| `/import grok [url]` | 直接从已打开 / 指定的 grok.com 对话页抓取并导入（无需插件） |
+| `/import grok [url]` | 直接从已打开 / 指定的 grok.com 对话页抓取并导入（无需插件；chatcli 会自动起 Chrome） |
 | `/export 绝对路径` | 把某条历史导出成 JSON |
 | `/rewind` | 回退到某条用户消息，可改写重发 |
 | `/exit` | 退出 |
